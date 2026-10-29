@@ -159,3 +159,23 @@ class OkxRest:
                 break
             after = oldest
         return [rows[ts] for ts in sorted(rows) if since * 1000 <= ts < until * 1000]
+
+    async def recent_candles(
+        self, inst_id: str, *, since: float, until: float, bar: str = "1m"
+    ) -> list[dict[str, Any]]:
+        """Как ``candles_between``, но через market/candles: 300 свечей за запрос, только последние 1440."""
+        rows: dict[int, Any] = {}
+        after = int(until * 1000)
+        for _ in range(6):
+            params = {"instId": inst_id, "bar": bar, "limit": "300", "after": str(after)}
+            page = await self._get(REST_PATHS["candles"], params)
+            if not page:
+                break
+            for row in page:
+                ts_ms = int(row[0])
+                rows[ts_ms] = row
+            oldest = min(int(row[0]) for row in page)
+            if oldest <= since * 1000:
+                break
+            after = oldest
+        return [rows[ts] for ts in sorted(rows) if since * 1000 <= ts < until * 1000]
