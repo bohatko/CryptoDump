@@ -179,7 +179,8 @@
       <div class="card"><h3>Сигналы по отдельности <span class="hint muted">каждый алерт как сделка, без учёта занятого капитала</span></h3><div id="paperSignals"></div></div>
       <div class="card"><h3>Правила <span class="spacer"></span><button id="paperReset" class="small">Пересчитать с нуля</button></h3><div id="paperRules"></div></div>
     </div>
-    <div class="card" style="margin-top:14px"><h3>Сделки</h3><div class="scroll" id="paperTrades"></div></div>
+    <div class="card" style="margin-top:14px"><h3>Сделки счёта <span class="hint muted">вся сумма баланса, одна позиция за раз</span></h3><div class="scroll" id="paperTrades"></div></div>
+    <div class="card" style="margin-top:14px"><h3>Пропущенные сигналы <span class="hint muted">счёт не входил — капитал был занят или прибыль/риск мала; показано, чем сигнал кончился бы сам по себе, денег здесь нет</span></h3><div class="scroll" id="paperSkipped"></div></div>
   </section>
 
   <section id="tab-instrument" class="hidden">
@@ -668,20 +669,31 @@ async function refreshPaper() {
       <span>Внутри минуты</span><span>если стоп и тейк в одной свече — считаем стоп</span>
     </div><div class="muted" style="margin-top:8px;font-size:12.5px">Правила меняются в «Настройки → Виртуальный счёт»; «Пересчитать с нуля» прогонит все алерты из истории заново.</div>`;
 
+  const replayMark = (t) => t.source === "replay" ? ' <span class="muted" title="посчитано по минутным свечам OKX">⏮</span>' : "";
+  const plan = (t) => `<td class="num">${fmtPx(t.entry)}</td><td class="num">${fmtPx(t.stop)}</td><td class="num">${fmtPx(t.target)}</td>`;
+  const pct = (v) => `<td class="num ${pctCls(v)}">${v == null ? "—" : sgn(v) + "%"}</td>`;
   $("#paperTrades").innerHTML = table(
-    ["Время", "Инструмент", "Окно", "#Вход", "#Стоп", "#Тейк", "#Выход", "Итог", "#Цена", "#Маржа", "#R", "#P/L, $", "#Баланс", "Счёт"],
-    p.trades.map((t) => `<tr>
-      <td>${fmtTime(t.openedAt)}</td><td>${instLink(t.instId)}</td><td>${esc(t.window)}</td>
-      <td class="num">${fmtPx(t.entry)}</td><td class="num">${fmtPx(t.stop)}</td><td class="num">${fmtPx(t.target)}</td>
+    ["Время", "Инструмент", "Окно", "#Вход", "#Стоп", "#Тейк", "#Выход", "Итог", "#Цена", "#Маржа", "#R", "#Маржа, $", "#P/L, $", "#Баланс"],
+    p.trades.filter((t) => t.taken).map((t) => `<tr>
+      <td>${fmtTime(t.openedAt)}</td><td>${instLink(t.instId)}</td><td>${esc(t.window)}</td>${plan(t)}
       <td class="num">${t.status === "open" ? '<span class="amber">открыта</span>' : fmtPx(t.exit)}</td>
-      <td>${t.status === "open" ? "—" : esc(t.reason)}${t.source === "replay" ? ' <span class="muted" title="посчитано по минутным свечам OKX">⏮</span>' : ""}</td>
-      <td class="num ${pctCls(t.pricePct)}">${t.pricePct == null ? "—" : sgn(t.pricePct) + "%"}</td>
-      <td class="num ${pctCls(t.marginPct)}">${t.marginPct == null ? "—" : sgn(t.marginPct) + "%"}</td>
+      <td>${t.status === "open" ? "—" : esc(t.reason)}${replayMark(t)}</td>
+      ${pct(t.pricePct)}${pct(t.marginPct)}
       <td class="num ${pctCls(t.r)}">${t.r == null ? "—" : sgn(t.r)}</td>
-      <td class="num ${pctCls(t.pnl)}">${t.taken && t.status === "closed" ? sgn(t.pnl) : "—"}</td>
-      <td class="num">${t.balanceAfter == null ? "—" : t.balanceAfter.toFixed(2)}</td>
-      <td>${t.taken ? '<span class="pos">в счёте</span>' : `<span class="muted">${esc(t.skipReason)}</span>`}</td></tr>`),
+      <td class="num">${t.margin == null ? "—" : t.margin.toFixed(2)}</td>
+      <td class="num ${pctCls(t.pnl)}">${t.status === "closed" ? sgn(t.pnl) : "—"}</td>
+      <td class="num">${t.balanceAfter == null ? "—" : t.balanceAfter.toFixed(2)}</td></tr>`),
     "Сделок пока нет: счёт откроет первую по следующему алерту"
+  );
+  $("#paperSkipped").innerHTML = table(
+    ["Время", "Инструмент", "Окно", "Почему пропущен", "#Вход", "#Стоп", "#Тейк", "Сигнал", "#Цена", "#R"],
+    p.trades.filter((t) => !t.taken).map((t) => `<tr>
+      <td>${fmtTime(t.openedAt)}</td><td>${instLink(t.instId)}</td><td>${esc(t.window)}</td>
+      <td class="muted">${esc(t.skipReason)}</td>${plan(t)}
+      <td>${t.status === "open" ? '<span class="muted">ещё идёт</span>' : esc(t.reason)}${replayMark(t)}</td>
+      ${pct(t.pricePct)}
+      <td class="num ${pctCls(t.r)}">${t.r == null ? "—" : sgn(t.r)}</td></tr>`),
+    "Пропущенных нет"
   );
 }
 
