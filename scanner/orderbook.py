@@ -190,7 +190,7 @@ class OrderBook:
             bids = [lv for lv in self.bids if _fresh(lv, now, cfg.stale_level_s)]
             asks = [lv for lv in self.asks if _fresh(lv, now, cfg.stale_level_s)]
 
-        band = _band(bids, asks, cfg.band_pct)
+        band = band_notional(bids, asks, cfg.band_pct)
 
         # Срез до запрошенной глубины делается здесь, а не при хранении: когда верхние
         # уровни выедают, снизу должно что-то подтянуться.
@@ -376,7 +376,7 @@ def _as_int(value: object) -> int | None:
         return None
 
 
-def _band(bids: list[Level], asks: list[Level], band_pct: float) -> tuple[float, bool]:
+def band_notional(bids: list[Level], asks: list[Level], band_pct: float) -> tuple[float, bool]:
     """Номинал обеих сторон в ±band_pct% от середины спреда и дотянулся ли стакан до краёв."""
     if band_pct <= 0 or not bids or not asks:
         return 0.0, True

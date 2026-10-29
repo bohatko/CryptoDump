@@ -39,6 +39,7 @@ from .config import (
 from .detection import detect_signals, passed_liquidity
 from .instrument import InstrumentState
 from .models import BookSummary
+from .orderbook import band_notional
 
 if TYPE_CHECKING:
     from .engine import Engine
@@ -261,12 +262,17 @@ class Dashboard:
         if state is None:
             return None
         book = state.book
-        depth = max(1, self.engine.cfg.depth.levels)
+        cfg = self.engine.cfg.depth
+        depth = max(1, cfg.levels)
         bids, asks = book.bids[:depth], book.asks[:depth]
+        band, covered = band_notional(book.bids, book.asks, cfg.band_pct)
         return {
             "ageS": now - book.updated_at if book.updated_at else None,
             "levels": min(len(bids), len(asks)),
             "totalNotional": sum(lv.notional for lv in bids) + sum(lv.notional for lv in asks),
+            "bandPct": cfg.band_pct,
+            "bandNotional": band,
+            "bandCovered": covered,
             "authoritative": book.authoritative,
             "gaps": book.gaps,
         }
