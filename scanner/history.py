@@ -49,6 +49,13 @@ CREATE TABLE IF NOT EXISTS episodes (
 );
 CREATE INDEX IF NOT EXISTS episodes_started ON episodes(started_at);
 CREATE INDEX IF NOT EXISTS episodes_inst ON episodes(inst_id, started_at);
+
+CREATE TABLE IF NOT EXISTS paper_trades (
+    alert_id INTEGER PRIMARY KEY,
+    opened_at REAL NOT NULL,
+    status TEXT NOT NULL,
+    payload TEXT NOT NULL
+);
 """
 
 MAX_LIMIT = 500
@@ -296,6 +303,37 @@ class History:
             "hits": hits,
             "statuses": statuses,
         }
+
+    # ---------- виртуальный счёт ----------
+
+    def alert_payloads(self, *, exclude: set[int] | None = None) -> list[tuple[int, dict[str, Any]]]:
+        """Все алерты по времени — для прогона виртуального счёта по прошлым сигналам."""
+        out = []
+        for r in self._db.execute("SELECT id, payload FROM alerts ORDER BY ts, id"):
+            if exclude and r["id"] in exclude:
+                continue
+            try:
+                out.append((int(r["id"]), json.loads(r["payload"])))
+            except ValueError:
+                continue
+        return out
+
+    def save_paper(self, alert_id: int, opened_at: float, status: str, payload: dict[str, Any]) -> None:
+        self._db.execute(
+            "INSERT INTO paper_trades (alert_id, opened_at, status, payload) VALUES (?, ?, ?, ?)"
+            " ON CONFLICT(alert_id) DO UPDATE SET opened_at = excluded.opened_at, status = excluded.status,"
+            " payload = excluded.payload",
+            (alert_id, opened_at, status, json.dumps(payload, ensure_ascii=False)),
+        )
+        self._db.commit()
+
+    def paper_trades(self) -> list[dict[str, Any]]:
+        rows = self._db.execute("SELECT payload FROM paper_trades ORDER BY opened_at, alert_id").fetchall()
+        return [json.loads(r["payload"]) for r in rows]
+
+    def clear_paper(self) -> None:
+        self._db.execute("DELETE FROM paper_trades")
+        self._db.commit()
 
     def _count(self, sql: str, params: Any) -> int:
         return int(self._db.execute(sql, tuple(params)).fetchone()[0])

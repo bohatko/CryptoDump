@@ -104,6 +104,7 @@
     <button data-tab="overview" class="active">Обзор</button>
     <button data-tab="alerts">Алерты</button>
     <button data-tab="episodes">Дампы</button>
+    <button data-tab="paper">Счёт</button>
     <button data-tab="instrument">Инструмент</button>
     <button data-tab="settings">Настройки</button>
     <button data-tab="logs">Журнал</button>
@@ -165,6 +166,20 @@
       <div class="scroll" id="episodesTable"></div>
       <div class="pager"><button id="epPrev" class="small">←</button><span id="epPage"></span><button id="epNext" class="small">→</button></div>
     </div>
+  </section>
+
+  <section id="tab-paper" class="hidden">
+    <div id="paperNote"></div>
+    <div class="grid g4" id="paperKpis"></div>
+    <div class="grid g2" style="margin-top:14px">
+      <div class="card"><h3>Баланс счёта <span class="hint muted">после каждой закрытой сделки</span></h3><div id="paperCurve"></div></div>
+      <div class="card"><h3>Открытая позиция</h3><div id="paperOpen"></div></div>
+    </div>
+    <div class="grid g2" style="margin-top:14px">
+      <div class="card"><h3>Сигналы по отдельности <span class="hint muted">каждый алерт как сделка, без учёта занятого капитала</span></h3><div id="paperSignals"></div></div>
+      <div class="card"><h3>Правила <span class="spacer"></span><button id="paperReset" class="small">Пересчитать с нуля</button></h3><div id="paperRules"></div></div>
+    </div>
+    <div class="card" style="margin-top:14px"><h3>Сделки</h3><div class="scroll" id="paperTrades"></div></div>
   </section>
 
   <section id="tab-instrument" class="hidden">
@@ -299,6 +314,7 @@ function renderHeader() {
     ["задержка", s.feedLagS == null ? "—" : `<span class="${s.feedLagS >= 3 ? "neg" : ""}" title="на сколько сделки приходят позже биржи (медиана 30 c); норма ~0.1 c">${s.feedLagS.toFixed(1)} c</span>`],
     ["стаканы", `${s.depth.slots}/${s.depth.slotsLimit}${s.depth.slotsLimit < s.depth.slotsConfigured ? ` <span class="neg" title="урезано из-за задержки данных; вернётся само, когда канал разгрузится">(из ${s.depth.slotsConfigured})</span>` : ""}${s.depth.pending ? " (+" + s.depth.pending + " ждут)" : ""} · ${s.depth.mode}`],
     ["алертов", s.alertsSent],
+    ["счёт", s.paper && s.paper.enabled ? `<a href="#" data-tab-link="paper" class="${s.paper.balance < s.paper.start ? "neg" : s.paper.balance > s.paper.start ? "pos" : ""}">${s.paper.balance.toFixed(2)} USDT</a>${s.paper.open ? " · в сделке " + esc(s.paper.open.split("-")[0]) : ""}` : "выкл"],
     ["оценка", s.lastEvalMs ? s.lastEvalMs + " мс" : "—"],
     ["ошибок 5 мин", `<span class="${s.logs.errors5m ? "neg" : ""}">${s.logs.errors5m}</span>`],
   ];
@@ -575,6 +591,105 @@ function chart(candles) {
     <text x="0" y="${H + 14}">${t0}</text><text x="${W - 110}" y="${H + 14}">${t1}</text></svg>`;
 }
 
+// ---------- виртуальный счёт ----------
+const sgn = (v, d = 2) => v == null ? "—" : (v > 0 ? "+" : "") + v.toFixed(d);
+const money = (v) => v == null ? "—" : sgn(v) + " $";
+
+function equityCurve(points, start) {
+  if (points.length < 2) return `<div class="empty">Кривая появится после первой закрытой сделки</div>`;
+  const W = 600, H = 180, P = 14;
+  const vals = points.map((p) => p.balance);
+  const lo = Math.min(start, ...vals), hi = Math.max(start, ...vals);
+  const span = hi - lo || 1;
+  const x = (i) => P + (W - 2 * P - 50) * (i / (points.length - 1));
+  const y = (v) => P + (H - 2 * P) * (1 - (v - lo) / span);
+  const line = points.map((p, i) => `${x(i)},${y(p.balance)}`).join(" ");
+  const last = vals[vals.length - 1];
+  const col = last >= start ? "#3ecf8e" : "#ff5d5d";
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="height:200px">
+    <line x1="${P}" x2="${W - 60}" y1="${y(start)}" y2="${y(start)}" stroke="#2a313b" stroke-dasharray="4 4"/>
+    <polyline points="${line}" fill="none" stroke="${col}" stroke-width="2"/>
+    ${points.map((p, i) => `<circle cx="${x(i)}" cy="${y(p.balance)}" r="3" fill="${col}"><title>${fmtTime(p.ts)}: ${p.balance.toFixed(2)} $</title></circle>`).join("")}
+    <text x="${W - 55}" y="${y(hi) + 10}">${hi.toFixed(2)}</text><text x="${W - 55}" y="${y(lo)}">${lo.toFixed(2)}</text>
+    <text x="${W - 55}" y="${y(start) - 3}">старт</text></svg>`;
+}
+
+async function refreshPaper() {
+  const p = await api("/api/paper");
+  const a = p.account, s = p.signals, r = p.rules;
+  const notes = [];
+  if (!p.enabled) notes.push(`<div class="banner warn">Виртуальный счёт выключен (paper.enabled = false): сделки считаются, но капитал не задействуется.</div>`);
+  if (!p.ready) notes.push(`<div class="banner warn">Идёт прогон прошлых алертов по свечам OKX…</div>`);
+  if (s.trades < p.minSample) notes.push(`<div class="banner warn">Закрыто сделок: ${s.trades}. Для выводов о матожидании нужно хотя бы ${p.minSample}: на малой выборке одна сделка меняет картину целиком.</div>`);
+  $("#paperNote").innerHTML = notes.join("");
+
+  const kpi = (title, value, sub = "", cls = "") => `<div class="card"><h3>${title}</h3><div class="kpi ${cls}">${value} <small>${sub}</small></div></div>`;
+  $("#paperKpis").innerHTML = [
+    kpi("Баланс", a.equity.toFixed(2) + " $", a.unrealized ? `закрыто ${a.balance.toFixed(2)} · в позиции ${money(a.unrealized)}` : `старт ${a.start.toFixed(2)} $`, pctCls(a.equity - a.start)),
+    kpi("Доход счёта", fmtPct(a.returnPct), `макс. просадка ${a.maxDrawdownPct.toFixed(1)}%`, pctCls(a.returnPct)),
+    kpi("Сделок счёта", a.trades, a.trades ? `${a.wins} в плюс · ${a.losses} в минус · ${a.winRate}%` : "ещё не было"),
+    kpi("Матожидание сделки", a.expectancyPct == null ? "—" : sgn(a.expectancyPct) + "%", a.trades ? `маржи; рост на сделку с реинвестом ${sgn(a.growthPerTradePct, 2)}%` : "маржи", pctCls(a.expectancyPct)),
+  ].join("");
+
+  $("#paperCurve").innerHTML = equityCurve(p.curve, a.start);
+
+  const o = a.open;
+  $("#paperOpen").innerHTML = o
+    ? `<div class="kv">
+        <span>Инструмент</span><span>${instLink(o.instId)} · ${esc(o.window)} · открыт ${fmtTime(o.openedAt)}</span>
+        <span>Маржа × плечо</span><span>${o.margin.toFixed(2)} $ × ${r.leverage} = ${(o.margin * r.leverage).toFixed(2)} $</span>
+        <span>Вход / сейчас</span><span>${fmtPx(o.entry)} → ${fmtPx(o.price)} <span class="${pctCls(o.marginPct)}">(${sgn(o.marginPct)}% маржи, ${money(a.unrealized)})</span></span>
+        <span>Стоп</span><span>${fmtPx(o.stopNow)}${o.beArmed ? ' <span class="pos">в безубытке</span>' : ""}</span>
+        <span>Тейк</span><span>${fmtPx(o.target)}${o.firstTarget && !o.beArmed ? ` · безубыток после ${fmtPx(o.firstTarget)}` : ""}</span>
+        <span>Закрыть по времени</span><span>${fmtTime(o.openedAt + r.maxHoldS)}</span>
+      </div>`
+    : `<div class="empty">Позиции нет — счёт ждёт следующий сигнал</div>`;
+
+  const reasons = Object.entries(s.reasons).map(([k, v]) => `${esc(k)}: ${v}`).join(" · ") || "—";
+  const skipped = Object.entries(p.skipped).map(([k, v]) => `${esc(k)}: ${v}`).join(" · ") || "—";
+  $("#paperSignals").innerHTML = `<div class="kv">
+      <span>Закрыто / открыто</span><span>${s.trades} / ${s.open}</span>
+      <span>В плюс</span><span>${s.winRate == null ? "—" : s.winRate + "%"} (${s.wins} из ${s.trades})</span>
+      <span>Средний плюс / минус</span><span><span class="pos">${sgn(s.avgWinPct)}%</span> / <span class="neg">${sgn(s.avgLossPct)}%</span> маржи при ×${r.leverage}</span>
+      <span>Матожидание</span><span class="${pctCls(s.expectancyPct)}"><b>${s.expectancyPct == null ? "—" : sgn(s.expectancyPct) + "% маржи на сделку"}</b> · ${s.avgR == null ? "—" : sgn(s.avgR) + " R"}</span>
+      <span>Нужно в плюс для нуля</span><span>${s.breakevenWinRate == null ? "—" : s.breakevenWinRate + "%"} сделок</span>
+      <span>Profit factor</span><span>${s.profitFactor == null ? "—" : s.profitFactor}</span>
+      <span>Выходы</span><span>${reasons}</span>
+      <span>Пропущено счётом</span><span>${skipped}</span>
+    </div>`;
+
+  $("#paperRules").innerHTML = `<div class="kv">
+      <span>Вход</span><span>по цене плана (ask в момент алерта), вся сумма баланса, плечо ×${r.leverage}, одна позиция за раз</span>
+      <span>Тейк</span><span>${["1-я цель (38.2% отката дампа)", "2-я цель (61.8% отката)", "3-я цель (возврат к максимуму)"][r.targetIndex] || "цель " + (r.targetIndex + 1)}</span>
+      <span>Стоп</span><span>стоп плана; ${r.breakeven ? "после 1-й цели — в безубыток" : "без переноса"}; ликвидация, если она ближе стопа</span>
+      <span>По времени</span><span>закрыть по рынку через ${fmtDur(r.maxHoldS)}</span>
+      <span>Фильтр</span><span>прибыль/риск до тейка ≥ ${r.minRr}</span>
+      <span>Издержки</span><span>комиссия ${r.feePct}% × 2 от номинала, проскальзывание ${r.slippagePct}% на стопе и по времени</span>
+      <span>Внутри минуты</span><span>если стоп и тейк в одной свече — считаем стоп</span>
+    </div><div class="muted" style="margin-top:8px;font-size:12.5px">Правила меняются в «Настройки → Виртуальный счёт»; «Пересчитать с нуля» прогонит все алерты из истории заново.</div>`;
+
+  $("#paperTrades").innerHTML = table(
+    ["Время", "Инструмент", "Окно", "#Вход", "#Стоп", "#Тейк", "#Выход", "Итог", "#Цена", "#Маржа", "#R", "#P/L, $", "#Баланс", "Счёт"],
+    p.trades.map((t) => `<tr>
+      <td>${fmtTime(t.openedAt)}</td><td>${instLink(t.instId)}</td><td>${esc(t.window)}</td>
+      <td class="num">${fmtPx(t.entry)}</td><td class="num">${fmtPx(t.stop)}</td><td class="num">${fmtPx(t.target)}</td>
+      <td class="num">${t.status === "open" ? '<span class="amber">открыта</span>' : fmtPx(t.exit)}</td>
+      <td>${t.status === "open" ? "—" : esc(t.reason)}${t.source === "replay" ? ' <span class="muted" title="посчитано по минутным свечам OKX">⏮</span>' : ""}</td>
+      <td class="num ${pctCls(t.pricePct)}">${t.pricePct == null ? "—" : sgn(t.pricePct) + "%"}</td>
+      <td class="num ${pctCls(t.marginPct)}">${t.marginPct == null ? "—" : sgn(t.marginPct) + "%"}</td>
+      <td class="num ${pctCls(t.r)}">${t.r == null ? "—" : sgn(t.r)}</td>
+      <td class="num ${pctCls(t.pnl)}">${t.taken && t.status === "closed" ? sgn(t.pnl) : "—"}</td>
+      <td class="num">${t.balanceAfter == null ? "—" : t.balanceAfter.toFixed(2)}</td>
+      <td>${t.taken ? '<span class="pos">в счёте</span>' : `<span class="muted">${esc(t.skipReason)}</span>`}</td></tr>`),
+    "Сделок пока нет: счёт откроет первую по следующему алерту"
+  );
+}
+
+$("#paperReset").onclick = async () => {
+  if (!confirm("Пересчитать счёт с нуля по текущим правилам? Все алерты из истории прогонятся заново по свечам OKX.")) return;
+  try { await post("/api/control/paper-reset"); toast("Пересчитываю…"); setTimeout(() => refreshPaper().catch(() => {}), 3000); } catch (e) { toast(e.message, "err"); }
+};
+
 // ---------- настройки ----------
 const FIELDS = [
   ["Окна просадки, % от максимума окна", [["windows", "1m"], ["windows", "5m"], ["windows", "30m"], ["windows", "1h"], ["windows", "2h"]]],
@@ -597,6 +712,15 @@ const FIELDS = [
     ["trade", "max_stop_pct", "Стоп дальше — предупреждение, %"],
     ["trade", "min_rr", "Прибыль/риск до 2-й цели не ниже"],
     ["trade", "valid_s", "План актуален после алерта, с"],
+  ]],
+  ["Виртуальный счёт", [
+    ["paper", "start_balance", "Стартовый баланс, $ (после «Пересчитать»)"],
+    ["paper", "leverage", "Плечо"],
+    ["paper", "target_index", "Тейк: цель плана (0, 1, 2)"],
+    ["paper", "min_rr", "Не входить при прибыль/риск ниже"],
+    ["paper", "max_hold_s", "Закрыть по времени через, с"],
+    ["paper", "fee_pct", "Комиссия за сторону, %"],
+    ["paper", "slippage_pct", "Проскальзывание на стопе, %"],
   ]],
   ["Поток агрессора (CVD)", [
     ["cvd", "window_s", "Окно CVD, с"],
@@ -731,6 +855,7 @@ async function refreshTab() {
   if (TAB === "overview") return refreshOverview();
   if (TAB === "logs") return refreshLogs();
   if (TAB === "instrument") return refreshInstrument();
+  if (TAB === "paper") return refreshPaper();
   if ((TAB === "alerts" || TAB === "episodes") && Date.now() - lastHistAt > 15000) {
     lastHistAt = Date.now();
     if (!STATUS.history) return;
@@ -808,7 +933,9 @@ document.addEventListener("click", (e) => {
   const al = e.target.closest("[data-alert]");
   if (al) { openAlert(al.dataset.alert).catch((err) => toast(err.message, "err")); return; }
   const inst = e.target.closest("[data-inst]");
-  if (inst) { e.preventDefault(); openInst(inst.dataset.inst); }
+  if (inst) { e.preventDefault(); openInst(inst.dataset.inst); return; }
+  const tabLink = e.target.closest("[data-tab-link]");
+  if (tabLink) { e.preventDefault(); switchTab(tabLink.dataset.tabLink); }
 });
 
 tick();

@@ -43,6 +43,7 @@ from .market import OkxRest
 from .models import Alert, DropHit
 from .monitor import DropMonitor
 from .okx_ws import OkxPublicStream, Subscription, liquidations, per_instrument, split_by_endpoint
+from .paper import PaperBook
 from .state import load_state, save_state
 from .universe import bootstrap_candles, build_universe
 from .ws_router import WsRouter
@@ -86,6 +87,8 @@ class Engine:
         self.monitor = DropMonitor(gap_s=cfg.dashboard.episode_gap_s)
         # база открывается в run(), а не здесь: тесты создают Engine без файловой системы
         self.history: History | None = None
+        self.paper = PaperBook(cfg)
+        self._paper_task: asyncio.Task | None = None
         self.phase = "старт"
         self.last_eval_at = 0.0
         self.last_eval_ms = 0.0
@@ -139,6 +142,8 @@ class Engine:
             self.phase = "загрузка инструментов"
             await self._bootstrap()
             self._restore_state()
+            self.paper.load(self.history)
+            self.replay_paper()
             self.phase = "работает"
             tasks = [
                 asyncio.create_task(self._stream_loop(), name="ws"),
@@ -159,6 +164,8 @@ class Engine:
             log.info("останавливаюсь…")
             for task in tasks:
                 task.cancel()
+            if self._paper_task is not None:
+                self._paper_task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
         finally:
             self._stop.set()
@@ -206,6 +213,16 @@ class Engine:
 
     # ---------- дашборд и история ----------
 
+    def replay_paper(self, *, reset: bool = False) -> bool:
+        """Прогнать виртуальный счёт по истории алертов (``reset`` — начать с нуля по текущим правилам)."""
+        if self._paper_task is not None and not self._paper_task.done():
+            return False
+        if reset:
+            self.paper.reset()
+        # без _on_task_done: сбой прогона (нет REST) не должен останавливать сканирование
+        self._paper_task = asyncio.create_task(self.paper.replay(self.rest, self.states), name="paper-replay")
+        return True
+
     def _start_dashboard(self) -> asyncio.Task | None:
         if not self.cfg.dashboard.enabled:
             return None
@@ -232,13 +249,14 @@ class Engine:
         self.history.close()
         self.history = None
 
-    def _record(self, write: Callable[[History], object]) -> None:
+    def _record(self, write: Callable[[History], object]) -> object:
         if self.history is None:
-            return
+            return None
         try:
-            write(self.history)
+            return write(self.history)
         except Exception:  # noqa: BLE001 — сбой записи истории не должен ронять оценку
             log.exception("ошибка записи истории")
+            return None
 
     # ---------- бутстрап ----------
 
@@ -376,6 +394,10 @@ class Engine:
 
     async def _evaluate_all(self, *, now: float | None = None) -> list[Alert]:
         now = time.time() if now is None else now
+        try:
+            self.paper.update(self.states, now=now)
+        except Exception:  # noqa: BLE001 — виртуальный счёт не должен мешать оценке
+            log.exception("ошибка сопровождения виртуального счёта")
         # прогрев: без сделок и ликвидаций CVD/стакан пустые, сигнатуры дадут ложный ноль
         warmup_left = self.cfg.engine.warmup_s - (now - self._started_at)
         if warmup_left > 0:
@@ -466,7 +488,9 @@ class Engine:
     async def _publish(self, alert: Alert) -> None:
         published = await self.alerts.publish(alert)
         if published:
-            self._record(lambda h: h.add_alert(alert))
+            alert_id = self._record(lambda h: h.add_alert(alert))
+            if isinstance(alert_id, int) and alert_id > 0:
+                self.paper.on_alert(alert_id, alert.to_dict())
         if published and alert.sibling_windows:
             # остальные сработавшие окна того же дампа гасим, чтобы не спамить
             self.alerts.cooldown.suppress(alert.inst_id, alert.sibling_windows, now=alert.ts)
@@ -505,6 +529,7 @@ class Engine:
         self.cfg = fresh
         # компоненты держат ссылку на конфиг — без этого они работали бы на старых порогах
         self.router.cfg = fresh
+        self.paper.cfg = fresh
         self.depth.cfg = fresh
         if self.depth_scheduler is not None:
             self.depth_scheduler.cfg = fresh

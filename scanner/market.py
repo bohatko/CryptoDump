@@ -19,7 +19,10 @@ REST_PATHS = {
     "tickers": "/api/v5/market/tickers",
     "books": "/api/v5/market/books",
     "candles": "/api/v5/market/candles",
+    "history_candles": "/api/v5/market/history-candles",
 }
+# history-candles отдаёт не больше 100 свечей за запрос
+HISTORY_PAGE = 100
 
 
 class OkxRestError(RuntimeError):
@@ -134,3 +137,25 @@ class OkxRest:
         limit = max(1, min(limit, 300))
         data = await self._get(REST_PATHS["candles"], {"instId": inst_id, "bar": bar, "limit": str(limit)})
         return list(reversed(data))
+
+    async def candles_between(
+        self, inst_id: str, *, since: float, until: float, bar: str = "1m", max_pages: int = 30
+    ) -> list[dict[str, Any]]:
+        """Свечи с открытием в ``[since, until)`` по возрастанию — для прогона прошлых алертов.
+
+        ``after`` у OKX — «записи старше этого ts», поэтому листаем от ``until`` назад.
+        """
+        rows: dict[int, Any] = {}
+        after = int(until * 1000)
+        for _ in range(max_pages):
+            params = {"instId": inst_id, "bar": bar, "limit": str(HISTORY_PAGE), "after": str(after)}
+            page = await self._get(REST_PATHS["history_candles"], params)
+            if not page:
+                break
+            for row in page:
+                rows[int(row[0])] = row
+            oldest = min(int(row[0]) for row in page)
+            if oldest <= since * 1000 or len(page) < HISTORY_PAGE:
+                break
+            after = oldest
+        return [rows[ts] for ts in sorted(rows) if since * 1000 <= ts < until * 1000]

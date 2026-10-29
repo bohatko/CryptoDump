@@ -171,6 +171,27 @@ class TradeConfig:
 
 
 @dataclass
+class PaperConfig:
+    """Виртуальный счёт: каждая сделка по плану алерта на весь баланс, без реальных ордеров."""
+
+    enabled: bool = True
+    start_balance: float = 100.0
+    leverage: float = 5.0
+    # комиссия тейкера OKX за сторону, % от номинала (вход и выход по рынку)
+    fee_pct: float = 0.05
+    # проскальзывание при выходе по стопу и по времени: рыночный ордер в падающий стакан
+    slippage_pct: float = 0.05
+    # какую цель плана брать тейком: 0 — 38.2%, 1 — 61.8%, 2 — возврат к максимуму
+    target_index: int = 1
+    # сделка с прибылью/риском до тейка ниже этого не открывается (сигнал всё равно считается)
+    min_rr: float = 1.0
+    # после первой цели стоп переносится в безубыток (с учётом комиссий)
+    breakeven_after_first: bool = True
+    # откуп после дампа — идея на часы, не на дни: дольше держать — закрыть по рынку
+    max_hold_s: float = 7200.0
+
+
+@dataclass
 class DashboardConfig:
     enabled: bool = True
     # По умолчанию только локальный доступ. На другой адрес дашборд поднимется лишь
@@ -200,6 +221,7 @@ class Config:
     alerts: AlertsConfig = field(default_factory=AlertsConfig)
     engine: EngineConfig = field(default_factory=EngineConfig)
     trade: TradeConfig = field(default_factory=TradeConfig)
+    paper: PaperConfig = field(default_factory=PaperConfig)
     dashboard: DashboardConfig = field(default_factory=DashboardConfig)
     source_path: str | None = None
     _thresholds_cache: tuple[tuple[tuple[str, float], ...], list[tuple[int, float]]] | None = field(
@@ -321,6 +343,7 @@ def config_from_dict(data: dict[str, Any], source_path: str | None = None) -> Co
         ("alerts", AlertsConfig),
         ("engine", EngineConfig),
         ("trade", TradeConfig),
+        ("paper", PaperConfig),
         ("dashboard", DashboardConfig),
     ):
         section = data.get(name)

@@ -64,6 +64,7 @@ Dashboard (aiohttp.web, :8787) читает Engine / History / LogBuffer, пиш
 | `depth_guard.py` | `DepthGuard`: переподписка `books` при разрыве цепочки или протухании (backoff 5 → 120 c на инструмент, сброс после 60 c здоровья); REST-поллинг только при `depth.source == "rest"` |
 | `evaluate.py` | `evaluate_instrument()` — чистая функция: просадка → фильтр ликвидности → сигнатуры → `Alert` (с `plan`) / `DropSeen` / `None` |
 | `plan.py` | `build_plan()` — чистая функция: план лонга по алерту (вход = ask, стоп под стеной/дном, цели по откату дампа, R:R, размер от `trade.risk_usdt`, округление до `tickSz`) |
+| `paper.py` | виртуальный счёт: `open_trade` / `step` (сделка по бару low/high/close: стоп раньше тейка, безубыток после 1-й цели, выход по времени, ликвидация), `PaperBook` (весь баланс в одну позицию, реинвест, `replay` прошлых алертов по свечам `history-candles`, `reconstruct_plan` для алертов без плана, `summary` — матожидание) |
 | `detection.py` | три сигнатуры (`bid_wall`, `cvd_fade`, `liq_decay`), `passed_liquidity`, `score_ok` |
 | `orderbook.py` | `OrderBook`: REST-снимок, WS snapshot + инкременты по `seqId`, `summary()`, поиск и подтверждение стены |
 | `windows.py` | `TradeWindow` (секундные бакеты: CVD, точный high), `CandleBook`, `DropWindows`, `LiquidationTracker` |
@@ -150,6 +151,19 @@ Dashboard (aiohttp.web, :8787) читает Engine / History / LogBuffer, пиш
   применяет CLI-переопределения. Python-модули при этом не перезагружаются: после правки кода
   нужен перезапуск процесса.
 - `diag.py` выключает дашборд: он работает рядом с рабочим сканером, порт и база заняты.
+
+## Виртуальный счёт (`paper.py`, вкладка «Счёт»)
+
+- Одна функция `step` для живого счёта (бар = сделки с `checked_to` из `TradeWindow.range_since`,
+  каждые 2 c в `_evaluate_all`) и для прогона истории (бар = минутная свеча). Не заводите
+  отдельную логику для одного из режимов — результаты перестанут быть сравнимыми.
+- Порядок сделок на счёте важен (реинвест), поэтому живой `on_alert` игнорируется, пока
+  `replay` не закончил (`ready=False`) — прогон сам подберёт этот алерт из истории.
+  Занятость и баланс считаются на момент алерта (`_busy(at)`, `balance(at)`).
+- Свеча, в которую попал алерт, при прогоне пропускается: её high мог быть до входа.
+- Сделки — в таблице `paper_trades` (payload = `PaperTrade.to_dict()`); «Пересчитать с нуля»
+  (`/api/control/paper-reset` → `Engine.replay_paper(reset=True)`) чистит таблицу и прогоняет
+  все алерты по текущим правилам `paper.*`.
 
 ## Инварианты (каждый оплачен багом — не ломать)
 

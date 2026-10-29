@@ -118,6 +118,17 @@
     "valid_s": 900.0,
     "min_rr": 1.0
   },
+  "paper": {
+    "enabled": true,
+    "start_balance": 100.0,
+    "leverage": 5.0,
+    "fee_pct": 0.05,
+    "slippage_pct": 0.05,
+    "target_index": 1,
+    "min_rr": 1.0,
+    "breakeven_after_first": true,
+    "max_hold_s": 7200.0
+  },
   "dashboard": {
     "enabled": true,
     "host": "127.0.0.1",

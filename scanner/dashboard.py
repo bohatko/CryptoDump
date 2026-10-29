@@ -100,6 +100,7 @@ class Dashboard:
             "/api/alerts/{alert_id}": self.alert,
             "/api/episodes": self.episodes,
             "/api/stats": self.stats,
+            "/api/paper": self.paper,
             "/api/instruments": self.instruments,
             "/api/instrument/{inst_id}": self.instrument,
             "/api/logs": self.log_records,
@@ -184,6 +185,12 @@ class Dashboard:
             "lastEvalAt": e.last_eval_at,
             "lastEvalMs": round(e.last_eval_ms, 1),
             "feedLagS": e.feed_lag_s,
+            "paper": {
+                "enabled": cfg.paper.enabled,
+                "start": cfg.paper.start_balance,
+                "balance": round(e.paper.balance(), 2),
+                "open": next((t.inst_id for t in e.paper.trades.values() if t.taken and t.status == "open"), None),
+            },
             "streams": streams,
             "depth": {
                 "mode": cfg.depth.mode,
@@ -300,6 +307,10 @@ class Dashboard:
                 offset=_int(q.get("offset")) or 0,
             )
         )
+
+    async def paper(self, _request: web.Request) -> web.Response:
+        e = self.engine
+        return _json(e.paper.summary(e.states, now=time.time()))
 
     async def stats(self, request: web.Request) -> web.Response:
         days = _int(request.query.get("days")) or 7
@@ -498,6 +509,14 @@ class Dashboard:
             e.alerts.muted = bool(body.get("muted", not e.alerts.muted))
             log.info("дашборд: тихий режим %s", "включён" if e.alerts.muted else "выключен")
             return _json({"ok": True, "muted": e.alerts.muted})
+
+        if action == "paper-reset":
+            if e.history is None:
+                return _error(400, "история выключена — счёту негде хранить сделки")
+            if not e.replay_paper(reset=True):
+                return _error(409, "пересчёт уже идёт")
+            log.info("дашборд: виртуальный счёт пересчитывается с нуля")
+            return _json({"ok": True})
 
         if action == "telegram-test":
             client = e.alerts.telegram_client

@@ -91,6 +91,16 @@ class TradeWindow:
         lows = [b.low for s, b in self._seconds.items() if since <= s <= now and b.low > 0]
         return min(lows) if lows else None
 
+    def range_since(self, since: float, *, now: float) -> tuple[float, float, float] | None:
+        """``(low, high, close)`` сделок с секунды ``since`` — что цена успела пройти с прошлой проверки."""
+        start = int(since)
+        seconds = sorted(s for s in self._seconds if start <= s <= now)
+        if not seconds:
+            return None
+        buckets = [self._seconds[s] for s in seconds]
+        low = min(b.low for b in buckets if b.low > 0)
+        return low, max(b.high for b in buckets), buckets[-1].close
+
     def last_price(self) -> float | None:
         if not self._seconds:
             return None
