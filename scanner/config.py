@@ -57,6 +57,10 @@ class MarketConfig:
 class DepthConfig:
     levels: int = 20
     min_notional_usdt: float = 1_000_000.0
+    # Ликвидность — сумма заявок в полосе ±band_pct% от середины спреда (0 — по levels уровням).
+    # 20 уровней врут в обе стороны: у плотных стаканов (HYPE, PEPE) это сотые доли процента
+    # от цены и копейки, у редких (CASHCAT, KORU) — несколько процентов и дальние заявки.
+    band_pct: float = 1.0
     poll_interval_s: float = 5.0
     concurrency: int = 8
     stale_level_s: float = 10.0
@@ -97,8 +101,9 @@ class DepthConfig:
     # этого не растёт, а круг «подписка → тонкий → отписка» съедал лимит подписок.
     book_thin_retry_s: float = 600.0
     # запас глубины: сколько уровней хранить, чтобы при выедании верхних было что
-    # подтянуть снизу. Считаем всегда ровно по levels.
-    store_levels: int = 100
+    # подтянуть снизу, и чтобы полоса band_pct помещалась в стакан. Стена и
+    # покупатели/продавцы считаются по levels; 400 — максимум books у OKX.
+    store_levels: int = 400
 
 
 @dataclass

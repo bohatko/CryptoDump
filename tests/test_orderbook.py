@@ -296,3 +296,38 @@ def test_rest_snapshot_needs_ws_resync(now: float) -> None:
     assert book.needs_resync(Config().depth, now=now + 0.1) is False  # свежий, но...
     book.incremental = True
     assert book.needs_resync(Config().depth, now=now + 0.1) is True  # ...без seqId нужен WS-снимок
+
+
+def _ladder(start: float, step: float, n: int, sz: str) -> list[list[str]]:
+    return [[f"{start + step * i:.10f}", sz] for i in range(n)]
+
+
+def test_liquidity_band_dense_book_with_tiny_tick(now: float) -> None:
+    """Как PEPE: шаг цены 0.002%, 20 уровней — копейки, а в ±1% от цены — миллионы."""
+    cfg = Config()
+    book = OrderBook("PEPE-USDT-SWAP")
+    bids = _ladder(100.0, -0.002, 400, "100")  # 400 уровней по 10k USDT вниз на 0.8%
+    asks = _ladder(100.002, 0.002, 400, "100")
+    book.apply_snapshot({"bids": bids, "asks": asks}, max_levels=400, now=now)
+
+    summary = book.summary(cfg.depth, now=now)
+    assert summary.total_notional < 0.5e6  # 20 + 20 уровней × 10k
+    assert summary.band_notional > 7e6 and not summary.band_covered  # 400 уровней не дотянулись до 1%
+    assert passed_liquidity(cfg, summary)
+
+    cfg.depth.band_pct = 0.0  # старое правило: только 20 уровней
+    assert not passed_liquidity(cfg, book.summary(cfg.depth, now=now))
+
+
+def test_liquidity_band_ignores_far_orders_of_sparse_book(now: float) -> None:
+    """Как CASHCAT: 20 уровней растянуты на 10% — у цены пусто, а сумма набегает от дальних заявок."""
+    cfg = Config()
+    book = OrderBook("CASHCAT-USDT-SWAP")
+    bids = [["99.9", "100"]] + _ladder(98.5, -0.5, 19, "1000")  # у цены 10k, дальше 1% — по 100k
+    asks = [["100.1", "100"]] + _ladder(101.5, 0.5, 19, "1000")
+    book.apply_snapshot({"bids": bids, "asks": asks}, max_levels=400, now=now)
+
+    summary = book.summary(cfg.depth, now=now)
+    assert summary.total_notional > 3e6
+    assert summary.band_notional < 0.1e6 and summary.band_covered
+    assert not passed_liquidity(cfg, summary)

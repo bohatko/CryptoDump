@@ -39,6 +39,7 @@ def _describe(engine: Engine) -> str:
             f"   стакан: уровней={book.levels} полный={book.full_depth} источник={state.book.source or '—'}"
             f" возраст={age_ms:.0f}мс seq={state.book.seq_id} разрывов={state.book.gaps}\n"
             f"   глубина: bid={book.bid_notional / 1e6:.2f}M ask={book.ask_notional / 1e6:.2f}M"
+            f" в±{book.band_pct:g}%={book.band_notional / 1e6:.2f}M{'' if book.band_covered else '+'}"
             f" стена={'да' if book.wall is not None else 'нет'}\n"
             f"   трейды: {len(state.trades._seconds)}с данных, CVD={cvd.cvd / 1e3:.0f}k"
             f" (buy={cvd.buy_notional / 1e3:.0f}k sell={cvd.sell_notional / 1e3:.0f}k)\n"

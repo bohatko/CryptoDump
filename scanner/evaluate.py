@@ -83,7 +83,7 @@ def evaluate_instrument(
         report(STATUS_NO_BOOK, "стакан не готов")
         return DropSeen(drop=deep)
     if not passed_liquidity(cfg, book):
-        log.debug("%s: просадка есть, стакан не прошёл фильтр (%.0f USDT)", state.inst_id, book.total_notional)
+        log.debug("%s: просадка есть, стакан не прошёл фильтр (%.0f USDT)", state.inst_id, book.liquidity_notional)
         report(STATUS_THIN_BOOK, _book_detail(book))
         return None
 
@@ -126,7 +126,9 @@ def evaluate_instrument(
 
 
 def _book_detail(book: BookSummary) -> str:
-    parts = [f"{book.total_notional / 1e6:.2f}M USDT"]
+    parts = [f"{book.liquidity_notional / 1e6:.2f}M USDT"]
+    if book.band_pct > 0:
+        parts[0] += f" в ±{book.band_pct:g}%"
     if not book.fresh:
         parts.append("протух")
     if not book.full_depth:

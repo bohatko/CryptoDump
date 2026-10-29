@@ -152,7 +152,9 @@ class DepthGuard:
             if self._stop.is_set():
                 return
             try:
-                raw = await self.rest.books(state.inst_id, depth=self.cfg.depth.levels)
+                # глубже levels: полоса band_pct у плотного стакана шире 20 уровней (400 — максимум OKX)
+                depth = min(400, max(self.cfg.depth.levels, self.cfg.depth.store_levels))
+                raw = await self.rest.books(state.inst_id, depth=depth)
             except OkxRestError as exc:
                 log.debug("стакан %s: %s", state.inst_id, exc)
                 return

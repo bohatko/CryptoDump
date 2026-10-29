@@ -287,7 +287,8 @@ def format_alert_html(alert: "Alert") -> str:
     lines += [
         "",
         f"Стакан {alert.book.levels} ур.: покупатели {_money(alert.book.bid_notional)}"
-        f" / продавцы {_money(alert.book.ask_notional)} USDT",
+        f" / продавцы {_money(alert.book.ask_notional)} USDT"
+        + (f"; в ±{alert.book.band_pct:g}% от цены {_money(alert.book.band_notional)}" if alert.book.band_pct else ""),
         f"Поток {alert.cvd.window_s / 60:g} мин: купили {_money(alert.cvd.buy_notional)}"
         f" / продали {_money(alert.cvd.sell_notional)} (перевес {_money_signed(alert.cvd.cvd)})",
         f"<i>{esc(alert.inst_type)} · {when} · не финансовая рекомендация, расчёт по уровням</i>",

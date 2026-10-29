@@ -357,7 +357,7 @@ async function refreshOverview() {
       return `<tr class="click" data-inst="${esc(x.instId)}"><td>${esc(x.instId)}${x.static ? ' <span class="tag">постоянный</span>' : ""}</td>
         <td class="num ${pctCls(x.dropPct)}">${x.dropPct == null ? "—" : x.dropPct <= -99 ? "вручную" : fmtPct(x.dropPct)}</td>
         <td class="num">${fmtDur(x.ageS)}</td><td class="num">${fmtDur(x.ttlLeftS)}</td>
-        <td class="num">${fmtMoney(b.totalNotional)}</td><td class="num ${b.ageS == null || b.ageS > 15 ? "amber" : ""}">${age}</td>
+        <td class="num">${fmtMoney(b.bandPct ? b.bandNotional : b.totalNotional)}</td><td class="num ${b.ageS == null || b.ageS > 15 ? "amber" : ""}">${age}</td>
         <td>${x.static ? "" : `<button class="small" data-release="${esc(x.instId)}" title="Освободить слот">×</button>`}</td></tr>`;
     }),
     s.depth.mode === "ondemand" ? "Слоты свободны — стакан подключится под первый дамп" : "Стаканов нет"
@@ -452,6 +452,7 @@ async function openAlert(id) {
       <div class="card"><h3>Стакан</h3><div class="kv">
         <span>bid</span><span>${fmtMoney(b.bidNotional)}</span><span>ask</span><span>${fmtMoney(b.askNotional)}</span>
         <span>всего</span><span>${fmtMoney(b.totalNotional)}</span><span>imbalance</span><span>${fmtRatio(b.imbalance)}</span>
+        ${b.bandPct ? `<span>в ±${b.bandPct}% от цены</span><span>${fmtMoney(b.bandNotional)}</span>` : ""}
         <span>уровней</span><span>${b.levels ?? "—"}${b.fullDepth ? "" : " (неполный)"}</span><span>стена</span><span>${wall}</span></div></div>
       <div class="card"><h3>Поток агрессора</h3><div class="kv">
         <span>окно</span><span>${c.windowSeconds ?? "—"} с</span><span>CVD</span><span class="${pctCls(c.cvd)}">${fmtMoney(c.cvd)}</span>
@@ -539,7 +540,8 @@ async function refreshInstrument() {
   });
   const b = d.book;
   const bookHtml = b ? `<div class="kv">
-      <span>фильтр 1M</span><span class="${b.passed ? "pos" : "neg"}">${b.passed ? "проходит" : "не проходит"}</span>
+      <span>фильтр ликвидности</span><span class="${b.passed ? "pos" : "neg"}">${b.passed ? "проходит" : "не проходит"}</span>
+      ${b.bandPct ? `<span>в ±${b.bandPct}% от цены</span><span>${fmtMoney(b.bandNotional)}${b.bandCovered ? "" : " и больше"}</span>` : ""}
       <span>bid / ask</span><span>${fmtMoney(b.bidNotional)} / ${fmtMoney(b.askNotional)}</span>
       <span>всего</span><span>${fmtMoney(b.totalNotional)}</span><span>imbalance</span><span>${fmtRatio(b.imbalance)}</span>
       <span>лучший bid / ask</span><span>${fmtPx(b.bestBid)} / ${fmtPx(b.bestAsk)}</span>
@@ -706,7 +708,8 @@ $("#paperReset").onclick = async () => {
 const FIELDS = [
   ["Окна просадки, % от максимума окна", [["windows", "1m"], ["windows", "5m"], ["windows", "30m"], ["windows", "1h"], ["windows", "2h"]]],
   ["Стакан", [
-    ["depth", "min_notional_usdt", "Мин. глубина top-20, USDT"],
+    ["depth", "min_notional_usdt", "Мин. ликвидность стакана, USDT"],
+    ["depth", "band_pct", "Ликвидность в полосе ±% от цены (0 — по 20 уровням)"],
     ["depth", "wall_multiplier", "Стена: во сколько раз больше среднего"],
     ["depth", "wall_min_notional_usdt", "Стена: мин. номинал, USDT"],
     ["depth", "wall_persist_s", "Стена должна простоять, с"],

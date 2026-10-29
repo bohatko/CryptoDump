@@ -69,7 +69,7 @@ def passed_liquidity(cfg: Config, book: BookSummary) -> bool:
     ``require_full_depth`` важен: если снимок содержит только 5 уровней из ``books5``,
     сумма занижена, и порог в 1 млн USDT будет сравниваться с неполной глубиной.
     """
-    return book_ready(cfg, book) and book.total_notional >= cfg.depth.min_notional_usdt
+    return book_ready(cfg, book) and book.liquidity_notional >= cfg.depth.min_notional_usdt
 
 
 def book_ready(cfg: Config, book: BookSummary) -> bool:

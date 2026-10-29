@@ -190,6 +190,8 @@ class OrderBook:
             bids = [lv for lv in self.bids if _fresh(lv, now, cfg.stale_level_s)]
             asks = [lv for lv in self.asks if _fresh(lv, now, cfg.stale_level_s)]
 
+        band = _band(bids, asks, cfg.band_pct)
+
         # Срез до запрошенной глубины делается здесь, а не при хранении: когда верхние
         # уровни выедают, снизу должно что-то подтянуться.
         depth = max(1, cfg.levels)
@@ -207,6 +209,8 @@ class OrderBook:
         )
         summary.fresh = fresh_overall
         summary.full_depth = self.authoritative and summary.levels > 0
+        summary.band_pct = max(0.0, cfg.band_pct)
+        summary.band_notional, summary.band_covered = band
 
         candidate, ratio = find_wall(bids, cfg)
         wall = self._confirm_wall(candidate, cfg, now)
@@ -264,7 +268,7 @@ class OrderBook:
         return (now - self.updated_at) > cfg.stale_after_s
 
     def liquid_enough(self, cfg: DepthConfig, *, now: float | None = None) -> bool:
-        return self.summary(cfg, now=now).total_notional >= cfg.min_notional_usdt
+        return self.summary(cfg, now=now).liquidity_notional >= cfg.min_notional_usdt
 
     @property
     def age(self) -> float:
@@ -370,6 +374,16 @@ def _as_int(value: object) -> int | None:
         return int(value)  # type: ignore[arg-type]
     except (TypeError, ValueError):
         return None
+
+
+def _band(bids: list[Level], asks: list[Level], band_pct: float) -> tuple[float, bool]:
+    """Номинал обеих сторон в ±band_pct% от середины спреда и дотянулся ли стакан до краёв."""
+    if band_pct <= 0 or not bids or not asks:
+        return 0.0, True
+    mid = (bids[0].px + asks[0].px) / 2
+    lo, hi = mid * (1 - band_pct / 100), mid * (1 + band_pct / 100)
+    notional = sum(lv.notional for lv in bids if lv.px >= lo) + sum(lv.notional for lv in asks if lv.px <= hi)
+    return notional, bids[-1].px < lo and asks[-1].px > hi
 
 
 def _fresh(level: Level, now: float, stale_s: float) -> bool:

@@ -22,7 +22,7 @@ python -m scanner.diag -s BTC,ETH --seconds 30      # живой поток: ч�
 python -m scanner.main --dry-run -s BTC,ETH         # сканер без Telegram/вебхука; дашборд на :8787
 python -m scanner.main --dry-run -s BTC,ETH --port 8788   # второй экземпляр рядом с рабочим
 
-python tools/liquidity_probe.py --rounds 5          # кто проходит фильтр 1M USDT и насколько стабильно
+python tools/liquidity_probe.py --rounds 5          # кто проходит фильтр 1M USDT на 20 уровнях (старое правило, без band_pct)
 python tools/channel_cost.py --seconds 60           # трафик trades/books5/books на живом рынке
 python tools/backtest.py --hours 24 --top 10 --out tools/out/backtest_24h.csv
                                                     # бэктест по 1m-свечам (приближение: без стакана и CVD)
@@ -188,8 +188,11 @@ Dashboard (aiohttp.web, :8787) читает Engine / History / LogBuffer, пиш
    (она даёт чистый snapshot). Не чинить через REST.
 3. **Свежесть инкрементального стакана — по `book.updated_at`, не по `level.ts`.** Стоячая
    стена не получает апдейтов, и фильтр по уровню выкинул бы её ровно на `wall_persist_s`.
-4. **Хранить глубже, чем считать:** `store_levels` (100) в памяти, срез до `levels` (20)
-   только в `summary()`.
+4. **Хранить глубже, чем считать:** `store_levels` (400, максимум OKX) в памяти, срез до
+   `levels` (20) только в `summary()`. Фильтр ликвидности — по полосе ±`band_pct`% от середины
+   спреда (`BookSummary.liquidity_notional`), а не по 20 уровням: у плотных стаканов (HYPE, PEPE)
+   20 уровней — сотые доли процента от цены, у редких (CASHCAT) — проценты и дальние заявки.
+   Стена и bid/ask в алерте по-прежнему по `levels`.
 5. **Стена:** лучший бид не стена; база — среднее (не медиана) уровней ниже лучшего бида;
    подтверждение по времени `wall_persist_s`, а не по числу снимков (WS даёт ~10 снимков/с).
    Отсчёт идёт внутри `summary()`, поэтому его надо вызывать регулярно (это делает eval).

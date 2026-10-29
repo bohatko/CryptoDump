@@ -35,6 +35,7 @@
   "depth": {
     "levels": 20,
     "min_notional_usdt": 1000000,
+    "band_pct": 1.0,
     "poll_interval_s": 5.0,
     "concurrency": 8,
     "stale_level_s": 10.0,
@@ -47,7 +48,7 @@
     "wall_exclude_top_level": true,
     "wall_persist_s": 10.0,
     "source": "ws",
-    "store_levels": 100,
+    "store_levels": 400,
     "mode": "ondemand",
     "book_slots": 20,
     "book_ttl_s": 180,

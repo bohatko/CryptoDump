@@ -96,10 +96,20 @@ class BookSummary:
     wall_ratio: float = 0.0
     fresh: bool = True
     full_depth: bool = False  # снимок содержит все запрошенные уровни, а не только 5 из books5
+    band_pct: float = 0.0  # 0 — ликвидность считается по levels уровням
+    band_notional: float = 0.0  # заявки обеих сторон в ±band_pct% от середины спреда
+    # хранимые уровни дотянулись до края полосы с обеих сторон; иначе band_notional —
+    # оценка снизу (у плотного стакана 400 уровней OKX бывают уже ±1%)
+    band_covered: bool = True
 
     @property
     def total_notional(self) -> float:
         return self.bid_notional + self.ask_notional
+
+    @property
+    def liquidity_notional(self) -> float:
+        """Номинал, по которому работает фильтр ликвидности."""
+        return self.band_notional if self.band_pct > 0 else self.total_notional
 
     @property
     def imbalance(self) -> float:
@@ -267,6 +277,8 @@ class Alert:
                 "bidNotional": _round(self.book.bid_notional, 2),
                 "askNotional": _round(self.book.ask_notional, 2),
                 "totalNotional": _round(self.book.total_notional, 2),
+                "bandPct": self.book.band_pct,
+                "bandNotional": _round(self.book.band_notional, 2),
                 "imbalance": _round(self.book.imbalance, 3),
                 "levels": self.book.levels,
                 "fullDepth": self.book.full_depth,
