@@ -55,6 +55,8 @@ async def _run(args: argparse.Namespace) -> int:
     cfg.alerts.sinks = ["console"]
     cfg.engine.warmup_s = 0.0
     cfg.engine.log_level = args.log_level
+    # диагностика идёт рядом с рабочим сканером: порт дашборда и история заняты им
+    cfg.dashboard.enabled = False
 
     engine = Engine(cfg, dry_run=True)
 

@@ -8,6 +8,7 @@
 
 # Результаты работы сканера
 alerts.jsonl
+history.sqlite3*
 state.json
 state.json*.tmp
 *.log

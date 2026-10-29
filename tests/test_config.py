@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from scanner.config import Config, config_from_dict, load_config
+from scanner.config import Config, config_from_dict, load_config, merge_config
 
 EXAMPLE = Path(__file__).resolve().parent.parent / "scanner" / "config.example.json"
 
@@ -24,6 +24,13 @@ def test_example_config_matches_defaults(caplog: pytest.LogCaptureFixture) -> No
         data.pop("source_path", None)
         data.pop("_thresholds_cache", None)
     assert loaded == defaults
+
+
+def test_merge_config_replaces_windows_and_merges_sections() -> None:
+    base = {"windows": {"1m": 1.5, "5m": 3.0}, "depth": {"levels": 20, "mode": "ondemand"}}
+    merged = merge_config(base, {"windows": {"5m": 2.0}, "depth": {"mode": "top"}})
+    assert merged == {"windows": {"5m": 2.0}, "depth": {"levels": 20, "mode": "top"}}
+    assert base["depth"]["mode"] == "ondemand"  # исходник не мутирует
 
 
 def test_mode_change_requires_restart() -> None:

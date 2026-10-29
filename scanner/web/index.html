@@ -1,0 +1,767 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CryptoDump — дашборд</title>
+<style>
+  :root {
+    --bg: #0f1216; --panel: #171b21; --panel2: #1d222a; --line: #2a313b; --text: #d8dee6;
+    --muted: #8a95a3; --accent: #4ea1ff; --green: #3ecf8e; --red: #ff5d5d; --amber: #f5b94a; --violet: #a98bff;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  a { color: var(--accent); }
+  header { position: sticky; top: 0; z-index: 5; background: var(--panel); border-bottom: 1px solid var(--line); }
+  .bar { display: flex; align-items: center; gap: 14px; padding: 10px 18px; flex-wrap: wrap; }
+  .brand { font-weight: 700; font-size: 16px; letter-spacing: .3px; }
+  .pill { padding: 2px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; background: var(--panel2); border: 1px solid var(--line); white-space: nowrap; }
+  .pill.ok { color: var(--green); border-color: #2c5a45; } .pill.warn { color: var(--amber); border-color: #5f4a22; }
+  .pill.bad { color: var(--red); border-color: #6a2b2b; } .pill.info { color: var(--accent); border-color: #24476d; }
+  .metrics { display: flex; gap: 16px; flex-wrap: wrap; color: var(--muted); font-size: 12.5px; }
+  .metrics b { color: var(--text); font-weight: 600; }
+  .spacer { flex: 1; }
+  button { background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 5px 11px; cursor: pointer; font: inherit; font-size: 13px; }
+  button:hover { border-color: var(--accent); } button:disabled { opacity: .45; cursor: default; border-color: var(--line); }
+  button.primary { background: #1f4f80; border-color: #2d6aa8; } button.danger { color: var(--red); } button.on { color: var(--amber); border-color: #5f4a22; }
+  button.small { padding: 2px 7px; font-size: 12px; }
+  nav { display: flex; gap: 2px; padding: 0 12px; }
+  nav button { border: none; border-bottom: 2px solid transparent; border-radius: 0; background: none; padding: 8px 12px; color: var(--muted); }
+  nav button.active { color: var(--text); border-bottom-color: var(--accent); }
+  main { padding: 16px 18px 40px; max-width: 1500px; margin: 0 auto; }
+  .banner { margin: 0 0 12px; padding: 9px 14px; border-radius: 8px; border: 1px solid; display: flex; gap: 12px; align-items: center; }
+  .banner.warn { background: #2a2212; border-color: #5f4a22; color: var(--amber); }
+  .banner.bad { background: #2a1515; border-color: #6a2b2b; color: var(--red); }
+  .grid { display: grid; gap: 14px; }
+  .g2 { grid-template-columns: repeat(auto-fit, minmax(480px, 1fr)); }
+  .g3 { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+  .g4 { grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; min-width: 0; }
+  .card h3 { margin: 0 0 10px; font-size: 13px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; display: flex; gap: 8px; align-items: center; }
+  .card h3 .hint { text-transform: none; letter-spacing: 0; font-weight: 400; }
+  .kpi { font-size: 26px; font-weight: 700; } .kpi small { font-size: 13px; color: var(--muted); font-weight: 400; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; color: var(--muted); font-weight: 500; padding: 5px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  td { padding: 5px 8px; border-bottom: 1px solid #20262e; white-space: nowrap; }
+  tr.click { cursor: pointer; } tr.click:hover td { background: var(--panel2); }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .neg { color: var(--red); } .pos { color: var(--green); } .muted { color: var(--muted); } .amber { color: var(--amber); }
+  .empty { color: var(--muted); padding: 14px 4px; text-align: center; }
+  .tag { display: inline-block; padding: 1px 7px; border-radius: 4px; font-size: 11.5px; background: var(--panel2); border: 1px solid var(--line); margin-right: 3px; }
+  .st-алерт { color: var(--green); border-color: #2c5a45; } .st-мало { color: var(--amber); border-color: #5f4a22; }
+  .st-ждёт { color: var(--accent); border-color: #24476d; } .st-тонкий, .st-нет { color: var(--muted); }
+  .filters { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; }
+  input, select, textarea { background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; font: inherit; font-size: 13px; }
+  input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); }
+  textarea { width: 100%; min-height: 380px; font-family: ui-monospace, Consolas, monospace; font-size: 12.5px; }
+  .pager { display: flex; gap: 8px; align-items: center; margin-top: 10px; color: var(--muted); font-size: 12.5px; }
+  .hbar { display: grid; grid-template-columns: 150px 1fr 50px; gap: 8px; align-items: center; margin: 5px 0; font-size: 13px; }
+  .hbar .track { background: var(--panel2); height: 10px; border-radius: 5px; overflow: hidden; }
+  .hbar .fill { height: 100%; background: var(--accent); border-radius: 5px; }
+  .days { display: flex; gap: 6px; align-items: flex-end; height: 130px; padding-top: 6px; }
+  .day { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; font-size: 11px; color: var(--muted); min-width: 0; }
+  .day .cols { display: flex; gap: 2px; align-items: flex-end; height: 95px; }
+  .day .col { width: 12px; border-radius: 3px 3px 0 0; min-height: 1px; }
+  .legend { display: flex; gap: 14px; font-size: 12px; color: var(--muted); margin-top: 6px; }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 3px 14px; font-size: 13px; }
+  .kv span:nth-child(odd) { color: var(--muted); }
+  .form { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 14px; }
+  .field { display: grid; grid-template-columns: 1fr 150px; gap: 8px; align-items: center; margin: 6px 0; font-size: 13px; }
+  .field input, .field select { width: 100%; }
+  .field.changed input, .field.changed select { border-color: var(--amber); }
+  .restart { font-size: 10.5px; color: var(--amber); border: 1px solid #5f4a22; border-radius: 4px; padding: 0 5px; margin-left: 6px; }
+  .logs { font-family: ui-monospace, Consolas, monospace; font-size: 12.3px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; height: calc(100vh - 250px); overflow: auto; padding: 6px 10px; }
+  .logs div { white-space: pre-wrap; word-break: break-word; padding: 1px 0; }
+  .lv-WARNING { color: var(--amber); } .lv-ERROR, .lv-CRITICAL { color: var(--red); } .lv-DEBUG { color: var(--muted); }
+  .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: none; align-items: flex-start; justify-content: center; z-index: 20; padding: 50px 16px; overflow: auto; }
+  .modal-bg.open { display: flex; }
+  .modal { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; max-width: 900px; width: 100%; padding: 16px 18px; }
+  .modal h2 { margin: 0 0 12px; font-size: 18px; display: flex; gap: 10px; align-items: center; }
+  pre { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px; overflow: auto; font-size: 12px; max-height: 300px; }
+  #toast { position: fixed; right: 18px; bottom: 18px; display: flex; flex-direction: column; gap: 8px; z-index: 30; }
+  .toast { background: var(--panel2); border: 1px solid var(--line); border-left: 3px solid var(--accent); padding: 9px 14px; border-radius: 8px; max-width: 420px; box-shadow: 0 6px 20px rgba(0,0,0,.4); }
+  .toast.err { border-left-color: var(--red); } .toast.ok { border-left-color: var(--green); }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+  svg text { fill: var(--muted); font-size: 11px; }
+  .hidden { display: none !important; }
+  .scroll { overflow-x: auto; }
+</style>
+</head>
+<body>
+<header>
+  <div class="bar">
+    <span class="brand">CryptoDump</span>
+    <span id="phase" class="pill">…</span>
+    <div class="metrics" id="metrics"></div>
+    <span class="spacer"></span>
+    <button id="btnMute" title="Алерты пишутся в историю, но не уходят в Telegram и вебхук">Тихий режим</button>
+    <button id="btnTg">Тест Telegram</button>
+    <button id="btnRestart">Перезапуск</button>
+    <button id="btnStop" class="danger">Стоп</button>
+  </div>
+  <nav id="tabs">
+    <button data-tab="overview" class="active">Обзор</button>
+    <button data-tab="alerts">Алерты</button>
+    <button data-tab="episodes">Дампы</button>
+    <button data-tab="instrument">Инструмент</button>
+    <button data-tab="settings">Настройки</button>
+    <button data-tab="logs">Журнал</button>
+  </nav>
+</header>
+
+<main>
+  <div id="banners"></div>
+
+  <section id="tab-overview">
+    <div class="grid g4" id="kpis"></div>
+    <div class="grid g2" style="margin-top:14px">
+      <div class="card">
+        <h3>Сейчас в просадке <span class="hint muted" id="activeHint"></span></h3>
+        <div class="scroll" id="activeDrops"></div>
+      </div>
+      <div class="card">
+        <h3>Стаканы <span class="hint muted" id="slotsHint"></span></h3>
+        <div class="scroll" id="slots"></div>
+        <div class="chips" id="pending"></div>
+      </div>
+    </div>
+    <div class="grid g3" style="margin-top:14px">
+      <div class="card"><h3>Алерты и дампы по дням <span class="hint muted">7 дней</span></h3><div id="days"></div></div>
+      <div class="card"><h3>Чем закончились дампы <span class="hint muted">7 дней</span></h3><div id="statuses"></div></div>
+      <div class="card"><h3>Сигнатуры в алертах <span class="hint muted">7 дней</span></h3><div id="hits"></div></div>
+    </div>
+    <div class="grid g2" style="margin-top:14px">
+      <div class="card"><h3>Последние алерты</h3><div class="scroll" id="lastAlerts"></div></div>
+      <div class="card"><h3>Чаще всего <span class="hint muted">7 дней</span></h3><div class="scroll" id="top"></div></div>
+    </div>
+  </section>
+
+  <section id="tab-alerts" class="hidden">
+    <div class="card">
+      <div class="filters">
+        <input id="fAlInst" placeholder="Инструмент (BTC, SOL…)" size="20">
+        <select id="fAlWin"><option value="">Все окна</option><option>1m</option><option>5m</option><option>30m</option><option>1h</option><option>2h</option></select>
+        <select id="fAlHours"><option value="24">24 часа</option><option value="168" selected>7 дней</option><option value="720">30 дней</option><option value="">Всё время</option></select>
+        <select id="fAlScore"><option value="">Любой score</option><option value="2">score ≥ 2</option><option value="3">score = 3</option></select>
+        <span class="spacer"></span>
+        <span class="muted" id="alTotal"></span>
+      </div>
+      <div class="scroll" id="alertsTable"></div>
+      <div class="pager"><button id="alPrev" class="small">←</button><span id="alPage"></span><button id="alNext" class="small">→</button></div>
+    </div>
+  </section>
+
+  <section id="tab-episodes" class="hidden">
+    <div class="card">
+      <h3>История дампов <span class="hint muted">каждая просадка выше порога окна, даже если алерта не было, — видно, какой фильтр её отсеял</span></h3>
+      <div class="filters">
+        <input id="fEpInst" placeholder="Инструмент" size="16">
+        <select id="fEpStatus"><option value="">Любой итог</option><option>алерт</option><option>мало сигнатур</option><option>тонкий стакан</option><option>ждёт стакан</option><option>нет сделок</option></select>
+        <select id="fEpAlerted"><option value="">С алертом и без</option><option value="1">Только с алертом</option><option value="0">Без алерта</option></select>
+        <select id="fEpHours"><option value="24" selected>24 часа</option><option value="168">7 дней</option><option value="720">30 дней</option><option value="">Всё время</option></select>
+        <span class="spacer"></span><span class="muted" id="epTotal"></span>
+      </div>
+      <div class="scroll" id="episodesTable"></div>
+      <div class="pager"><button id="epPrev" class="small">←</button><span id="epPage"></span><button id="epNext" class="small">→</button></div>
+    </div>
+  </section>
+
+  <section id="tab-instrument" class="hidden">
+    <div class="filters">
+      <input id="instInput" list="instList" placeholder="BTC-USDT-SWAP" size="28">
+      <datalist id="instList"></datalist>
+      <button id="instGo" class="primary">Открыть</button>
+      <span class="spacer"></span>
+      <button id="instBook" class="hidden">Подключить стакан</button>
+      <button id="instRelease" class="hidden">Освободить стакан</button>
+      <button id="instCooldown">Сбросить кулдаун</button>
+    </div>
+    <div id="instBody"><div class="card empty">Выберите инструмент — или кликните строку в любой таблице.</div></div>
+  </section>
+
+  <section id="tab-settings" class="hidden">
+    <div id="cfgNote"></div>
+    <div class="form" id="cfgForm"></div>
+    <div class="filters" style="margin-top:14px">
+      <button id="cfgSave" class="primary">Сохранить и применить</button>
+      <button id="cfgReset">Отменить изменения</button>
+      <span class="muted" id="cfgDirty"></span>
+    </div>
+    <div class="card" style="margin-top:14px">
+      <h3>Конфиг JSON <span class="hint muted" id="cfgRawHint"></span></h3>
+      <textarea id="cfgRaw" spellcheck="false"></textarea>
+      <div class="filters" style="margin-top:8px"><button id="cfgRawApply">Применить JSON</button></div>
+    </div>
+  </section>
+
+  <section id="tab-logs" class="hidden">
+    <div class="filters">
+      <select id="logLevel"><option value="">Все уровни</option><option value="WARNING">WARNING и выше</option><option value="ERROR">Только ошибки</option></select>
+      <input id="logFilter" placeholder="Фильтр по тексту" size="30">
+      <label class="muted"><input type="checkbox" id="logFollow" checked> автопрокрутка</label>
+      <span class="spacer"></span><button id="logClear" class="small">Очистить экран</button>
+    </div>
+    <div class="logs" id="logs"></div>
+  </section>
+</main>
+
+<div class="modal-bg" id="modal"><div class="modal" id="modalBody"></div></div>
+<div id="toast"></div>
+
+<script>
+"use strict";
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+let TOKEN = localStorage.getItem("cd_token") || "";
+let STATUS = null;
+let TAB = "overview";
+let ONLINE = true;
+let lastStatsAt = 0, lastHistAt = 0;
+const PAGE = 50;
+const state = { alOffset: 0, epOffset: 0, inst: "", cfg: null, logSeq: 0, logs: [] };
+
+// ---------- API ----------
+async function api(path, opts = {}) {
+  const headers = { "Content-Type": "application/json" };
+  if (TOKEN) headers.Authorization = "Bearer " + TOKEN;
+  const res = await fetch(path, { ...opts, headers });
+  if (res.status === 401) {
+    const t = prompt("Токен дашборда (переменная окружения DASHBOARD_TOKEN):");
+    if (t) { TOKEN = t.trim(); localStorage.setItem("cd_token", TOKEN); return api(path, opts); }
+    throw new Error("нужен токен");
+  }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || (data.errors || []).join("; ") || res.statusText);
+  return data;
+}
+const post = (path, body = {}) => api(path, { method: "POST", body: JSON.stringify(body) });
+
+function toast(msg, kind = "") {
+  const el = document.createElement("div");
+  el.className = "toast " + kind;
+  el.textContent = msg;
+  $("#toast").appendChild(el);
+  setTimeout(() => el.remove(), kind === "err" ? 7000 : 3500);
+}
+
+// ---------- форматирование ----------
+const fmtPct = (v) => v == null ? "—" : (v > 0 ? "+" : "") + v.toFixed(2) + "%";
+const fmtMoney = (v) => {
+  if (v == null) return "—";
+  const a = Math.abs(v);
+  if (a >= 1e9) return (v / 1e9).toFixed(2) + "B";
+  if (a >= 1e6) return (v / 1e6).toFixed(2) + "M";
+  if (a >= 1e3) return (v / 1e3).toFixed(0) + "k";
+  return v.toFixed(0);
+};
+const fmtPx = (v) => {
+  if (v == null) return "—";
+  if (v >= 1000) return v.toLocaleString("ru-RU", { maximumFractionDigits: 1 });
+  if (v >= 1) return String(+v.toFixed(4));
+  return String(+v.toPrecision(5));
+};
+const fmtRatio = (v) => v == null ? "∞" : v.toFixed(2);
+const fmtDur = (s) => {
+  if (s == null) return "—";
+  if (s < 60) return Math.round(s) + " с";
+  if (s < 3600) return Math.floor(s / 60) + " мин " + Math.round(s % 60) + " с";
+  if (s < 86400) return Math.floor(s / 3600) + " ч " + Math.floor((s % 3600) / 60) + " мин";
+  return Math.floor(s / 86400) + " д " + Math.floor((s % 86400) / 3600) + " ч";
+};
+const fmtTime = (ts) => ts ? new Date(ts * 1000).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "—";
+const pctCls = (v) => v == null ? "" : v < 0 ? "neg" : v > 0 ? "pos" : "";
+const statusTag = (s) => `<span class="tag st-${esc((s || "").split(" ")[0])}">${esc(s || "—")}</span>`;
+const instLink = (id) => `<a href="#" data-inst="${esc(id)}">${esc(id)}</a>`;
+const table = (head, rows, empty = "Пусто") => rows.length
+  ? `<table><thead><tr>${head.map((h) => `<th class="${h.startsWith("#") ? "num" : ""}">${esc(h.replace(/^#/, ""))}</th>`).join("")}</tr></thead><tbody>${rows.join("")}</tbody></table>`
+  : `<div class="empty">${esc(empty)}</div>`;
+
+// ---------- шапка ----------
+function renderHeader() {
+  const s = STATUS;
+  const ph = $("#phase");
+  const wsDown = s.streams.some((x) => !x.connected) && s.phase === "работает";
+  ph.textContent = wsDown ? "нет WS" : s.phase;
+  ph.className = "pill " + (wsDown ? "bad" : s.phase === "работает" ? "ok" : s.phase === "прогрев" ? "warn" : "info");
+  const ws = s.streams.map((x) => `${x.endpoint} ${x.connected ? "✓" : "✗"}${x.reconnects ? " ↻" + x.reconnects : ""}`).join(" · ") || "—";
+  const metrics = [
+    ["аптайм", fmtDur(s.uptimeS)],
+    ["инструментов", s.instruments],
+    ["WS", ws],
+    ["стаканы", `${s.depth.slots}/${s.depth.slotsLimit}${s.depth.pending ? " (+" + s.depth.pending + " ждут)" : ""} · ${s.depth.mode}`],
+    ["алертов", s.alertsSent],
+    ["оценка", s.lastEvalMs ? s.lastEvalMs + " мс" : "—"],
+    ["ошибок 5 мин", `<span class="${s.logs.errors5m ? "neg" : ""}">${s.logs.errors5m}</span>`],
+  ];
+  $("#metrics").innerHTML = metrics.map(([k, v]) => `<span>${k}: <b>${v}</b></span>`).join("");
+  const mute = $("#btnMute");
+  mute.textContent = s.muted ? "Тихий режим: вкл" : "Тихий режим";
+  mute.classList.toggle("on", s.muted);
+  $("#btnTg").disabled = !s.telegram;
+  $("#btnTg").title = s.telegram ? "Отправить тестовое сообщение" : "Telegram не подключён (нет токена/чата или --dry-run)";
+
+  const banners = [];
+  if (!ONLINE) banners.push(`<div class="banner bad">Нет связи со сканером — переподключаюсь… (если нажимали «Перезапуск», это нормально)</div>`);
+  if (s.pendingRestart.length) banners.push(`<div class="banner warn">Сохранены настройки, которые применятся только после перезапуска: <b>${esc(s.pendingRestart.join(", "))}</b><span class="spacer"></span><button onclick="doRestart()">Перезапустить</button></div>`);
+  if (s.logs.errors5m >= 10) banners.push(`<div class="banner warn">За 5 минут ${s.logs.errors5m} ошибок в журнале — загляните во вкладку «Журнал».</div>`);
+  if (s.muted) banners.push(`<div class="banner warn">Тихий режим: алерты пишутся в историю, но в Telegram и вебхук не уходят.</div>`);
+  if (!s.history) banners.push(`<div class="banner warn">История отключена (dashboard.history_path пуст или база не открылась).</div>`);
+  $("#banners").innerHTML = banners.join("");
+}
+
+// ---------- обзор ----------
+async function refreshOverview() {
+  const d = await api("/api/drops");
+  const s = STATUS;
+  $("#activeHint").textContent = d.active.length ? `${d.active.length} инстр.` : "";
+  $("#activeDrops").innerHTML = table(
+    ["Инструмент", "Окно", "#Сейчас", "#Макс", "#Длится", "Итог", "Детали", "Стакан"],
+    d.active.map((e) => `<tr class="click" data-inst="${esc(e.instId)}"><td>${esc(e.instId)}</td><td>${esc(e.window)}</td>
+      <td class="num ${pctCls(e.dropPct)}">${fmtPct(e.dropPct)}</td><td class="num ${pctCls(e.maxDropPct)}">${fmtPct(e.maxDropPct)} <span class="muted">${esc(e.maxWindow)}</span></td>
+      <td class="num">${fmtDur(e.durationS)}</td><td>${statusTag(e.status)}</td><td class="muted">${esc(e.detail)}</td><td>${e.hasBook ? "✓" : "—"}</td></tr>`),
+    s.phase === "прогрев" ? `Прогрев: оценка начнётся через ${fmtDur(s.warmupLeftS)}` : "Ни один инструмент сейчас не пробил порог окна"
+  );
+  $("#slotsHint").textContent = `${s.depth.slots}/${s.depth.slotsLimit} · режим ${s.depth.mode}`;
+  $("#slots").innerHTML = table(
+    ["Инструмент", "#Просадка", "#Возраст", "#Осталось", "#Глубина", "#Свежесть", ""],
+    d.slots.map((x) => {
+      const b = x.book || {};
+      const age = b.ageS == null ? "нет снимка" : b.ageS < 2 ? "живой" : fmtDur(b.ageS);
+      return `<tr class="click" data-inst="${esc(x.instId)}"><td>${esc(x.instId)}${x.static ? ' <span class="tag">постоянный</span>' : ""}</td>
+        <td class="num ${pctCls(x.dropPct)}">${x.dropPct == null ? "—" : x.dropPct <= -99 ? "вручную" : fmtPct(x.dropPct)}</td>
+        <td class="num">${fmtDur(x.ageS)}</td><td class="num">${fmtDur(x.ttlLeftS)}</td>
+        <td class="num">${fmtMoney(b.totalNotional)}</td><td class="num ${b.ageS == null || b.ageS > 15 ? "amber" : ""}">${age}</td>
+        <td>${x.static ? "" : `<button class="small" data-release="${esc(x.instId)}" title="Освободить слот">×</button>`}</td></tr>`;
+    }),
+    s.depth.mode === "ondemand" ? "Слоты свободны — стакан подключится под первый дамп" : "Стаканов нет"
+  );
+  $("#pending").innerHTML = d.pending.length
+    ? `<span class="muted">Ждут слот:</span>` + d.pending.slice(0, 30).map((p) => `<span class="tag">${esc(p.instId)} ${fmtPct(p.dropPct)}</span>`).join("")
+    : "";
+
+  if (Date.now() - lastStatsAt > 30000) {
+    lastStatsAt = Date.now();
+    await refreshStats();
+  }
+}
+
+async function refreshStats() {
+  if (!STATUS.history) return;
+  const [st, day, last] = await Promise.all([
+    api("/api/stats?days=7"),
+    api("/api/stats?days=1"),
+    api("/api/alerts?limit=10"),
+  ]);
+  const conv = day.episodes ? Math.round((day.episodesAlerted / day.episodes) * 100) : 0;
+  $("#kpis").innerHTML = [
+    ["Алертов за 24 ч", day.alerts, `за 7 дней: ${st.alerts}`],
+    ["Дампов за 24 ч", day.episodes, `за 7 дней: ${st.episodes}`],
+    ["Дошли до алерта", conv + "%", `${day.episodesAlerted} из ${day.episodes} за 24 ч`],
+    ["Сейчас в просадке", STATUS.activeDrops, `инструментов в скане: ${STATUS.instruments}`],
+  ].map(([t, v, sub]) => `<div class="card"><h3>${t}</h3><div class="kpi">${v}</div><div class="muted">${sub}</div></div>`).join("");
+
+  const maxDay = Math.max(1, ...st.days.map((x) => Math.max(x.alerts, x.episodes)));
+  $("#days").innerHTML = st.days.length
+    ? `<div class="days">${st.days.map((x) => `<div class="day" title="${x.day}: алертов ${x.alerts}, дампов ${x.episodes}">
+        <div class="cols"><div class="col" style="height:${(x.episodes / maxDay) * 95}px;background:#3a4656"></div>
+        <div class="col" style="height:${(x.alerts / maxDay) * 95}px;background:var(--green)"></div></div>${x.day.slice(5)}</div>`).join("")}</div>
+       <div class="legend"><span><i style="background:#3a4656"></i>дампы</span><span><i style="background:var(--green)"></i>алерты</span></div>`
+    : `<div class="empty">Пока нет данных</div>`;
+  $("#statuses").innerHTML = hbars(st.statuses, { "алерт": "var(--green)", "мало сигнатур": "var(--amber)", "ждёт стакан": "var(--accent)" });
+  $("#hits").innerHTML = hbars(st.hits, {}, { bid_wall: "стена на бидах", cvd_fade: "разворот CVD", liq_decay: "затухание ликвидаций" });
+  $("#top").innerHTML = table(["Инструмент", "#Алертов", "#Макс. просадка"],
+    st.top.map((t) => `<tr class="click" data-inst="${esc(t.instId)}"><td>${esc(t.instId)}</td><td class="num">${t.alerts}</td><td class="num neg">${fmtPct(t.maxDropPct)}</td></tr>`), "Алертов не было");
+  $("#lastAlerts").innerHTML = alertsTable(last.items, "Алертов ещё не было");
+}
+
+function hbars(obj, colors = {}, labels = {}) {
+  const entries = Object.entries(obj || {}).sort((a, b) => b[1] - a[1]);
+  if (!entries.length) return `<div class="empty">Пока нет данных</div>`;
+  const max = Math.max(...entries.map((e) => e[1]));
+  return entries.map(([k, v]) => `<div class="hbar"><span>${esc(labels[k] || k)}</span>
+    <div class="track"><div class="fill" style="width:${(v / max) * 100}%;background:${colors[k] || "var(--violet)"}"></div></div><span class="num">${v}</span></div>`).join("");
+}
+
+function alertsTable(items, empty) {
+  return table(["Время", "Инструмент", "Окно", "#Просадка", "#Цена", "#Score", "Сигнатуры", "#Глубина"],
+    items.map((a) => `<tr class="click" data-alert="${a.id}"><td>${fmtTime(a.ts)}</td><td>${esc(a.instId)}</td><td>${esc(a.window)}</td>
+      <td class="num neg">${fmtPct(a.dropPct)}</td><td class="num">${fmtPx(a.price)}</td><td class="num">${a.score}/3</td>
+      <td>${a.hits.map((h) => `<span class="tag">${esc(h)}</span>`).join("")}</td><td class="num">${fmtMoney(a.totalNotional)}</td></tr>`), empty);
+}
+
+// ---------- алерты ----------
+async function refreshAlerts() {
+  const q = new URLSearchParams({ limit: PAGE, offset: state.alOffset });
+  if ($("#fAlInst").value.trim()) q.set("inst", $("#fAlInst").value.trim());
+  if ($("#fAlWin").value) q.set("window", $("#fAlWin").value);
+  if ($("#fAlHours").value) q.set("hours", $("#fAlHours").value);
+  if ($("#fAlScore").value) q.set("min_score", $("#fAlScore").value);
+  const r = await api("/api/alerts?" + q);
+  $("#alertsTable").innerHTML = alertsTable(r.items, "По этим фильтрам алертов нет");
+  $("#alTotal").textContent = `всего: ${r.total}`;
+  pager("al", state.alOffset, r.total);
+}
+
+async function openAlert(id) {
+  const a = await api("/api/alerts/" + id);
+  const b = a.book || {}, c = a.cvd || {}, l = a.liquidations || {}, s = a.signals || {};
+  const wall = b.wall ? `${fmtPx(b.wall.px)} × ${fmtMoney(b.wall.notional)} (${fmtRatio(b.wall.ratio)}× среднего)` : "нет";
+  $("#modalBody").innerHTML = `
+    <h2>${esc(a.instId)} <span class="tag">${esc(a.window)}</span> <span class="neg">${fmtPct(a.dropPct)}</span><span class="spacer"></span><button onclick="closeModal()">Закрыть</button></h2>
+    <div class="muted" style="margin-bottom:12px">${fmtTime(a.ts)} · цена ${fmtPx(a.price)} · максимум окна ${fmtPx(a.windowHigh)}${a.siblingWindows?.length ? " · также сработали: " + esc(a.siblingWindows.join(", ")) : ""}</div>
+    <div class="grid g3">
+      <div class="card"><h3>Стакан</h3><div class="kv">
+        <span>bid</span><span>${fmtMoney(b.bidNotional)}</span><span>ask</span><span>${fmtMoney(b.askNotional)}</span>
+        <span>всего</span><span>${fmtMoney(b.totalNotional)}</span><span>imbalance</span><span>${fmtRatio(b.imbalance)}</span>
+        <span>уровней</span><span>${b.levels ?? "—"}${b.fullDepth ? "" : " (неполный)"}</span><span>стена</span><span>${wall}</span></div></div>
+      <div class="card"><h3>Поток агрессора</h3><div class="kv">
+        <span>окно</span><span>${c.windowSeconds ?? "—"} с</span><span>CVD</span><span class="${pctCls(c.cvd)}">${fmtMoney(c.cvd)}</span>
+        <span>покупки</span><span>${fmtMoney(c.buyNotional)}</span><span>продажи</span><span>${fmtMoney(c.sellNotional)}</span>
+        <span>taker buy/sell</span><span>${fmtRatio(c.takerRatio)}</span></div></div>
+      <div class="card"><h3>Ликвидации</h3><div class="kv">
+        <span>окно</span><span>${l.windowSeconds ?? "—"} с</span><span>было</span><span>${fmtMoney(l.earlierNotional)}</span>
+        <span>стало</span><span>${fmtMoney(l.recentNotional)}</span><span>затухание</span><span>${fmtRatio(l.decayRatio)}</span></div></div>
+    </div>
+    <div style="margin:12px 0">Сигнатуры: <b>${s.score ?? 0}/3</b> ${(s.hits || []).map((h) => `<span class="tag">${esc(h)}</span>`).join("")}
+      <span class="spacer"></span> <a href="#" data-inst="${esc(a.instId)}">открыть инструмент →</a></div>
+    <details><summary class="muted">Сырые данные</summary><pre>${esc(JSON.stringify(a, null, 2))}</pre></details>`;
+  $("#modal").classList.add("open");
+}
+function closeModal() { $("#modal").classList.remove("open"); }
+
+// ---------- дампы ----------
+async function refreshEpisodes() {
+  const q = new URLSearchParams({ limit: PAGE, offset: state.epOffset });
+  if ($("#fEpInst").value.trim()) q.set("inst", $("#fEpInst").value.trim());
+  if ($("#fEpStatus").value) q.set("status", $("#fEpStatus").value);
+  if ($("#fEpAlerted").value) q.set("alerted", $("#fEpAlerted").value);
+  if ($("#fEpHours").value) q.set("hours", $("#fEpHours").value);
+  const r = await api("/api/episodes?" + q);
+  $("#episodesTable").innerHTML = table(["Начало", "Инструмент", "Окно", "#Макс. просадка", "#Цена", "#Длился", "Итог", "Детали", "Алерт"],
+    r.items.map((e) => `<tr class="click" data-inst="${esc(e.instId)}"><td>${fmtTime(e.startedAt)}</td><td>${esc(e.instId)}</td><td>${esc(e.window)}</td>
+      <td class="num neg">${fmtPct(e.maxDropPct)}</td><td class="num">${fmtPx(e.price)}</td><td class="num">${fmtDur(e.durationS)}</td>
+      <td>${statusTag(e.status)}</td><td class="muted">${esc(e.detail)}</td><td>${e.alerted ? '<span class="pos">✓</span>' : ""}</td></tr>`),
+    "Закрытых эпизодов пока нет — эпизод попадает сюда, когда просадка закончилась");
+  $("#epTotal").textContent = `всего: ${r.total}`;
+  pager("ep", state.epOffset, r.total);
+}
+
+function pager(prefix, offset, total) {
+  $(`#${prefix}Page`).textContent = total ? `${offset + 1}–${Math.min(offset + PAGE, total)} из ${total}` : "";
+  $(`#${prefix}Prev`).disabled = offset <= 0;
+  $(`#${prefix}Next`).disabled = offset + PAGE >= total;
+}
+
+// ---------- инструмент ----------
+async function loadInstList() {
+  const list = await api("/api/instruments?limit=1000");
+  $("#instList").innerHTML = list.map((x) => `<option value="${esc(x.instId)}">`).join("");
+}
+
+function openInst(id) {
+  state.inst = id.trim().toUpperCase();
+  $("#instInput").value = state.inst;
+  closeModal();
+  switchTab("instrument");
+}
+
+async function refreshInstrument() {
+  if (!state.inst) return;
+  let d;
+  try { d = await api("/api/instrument/" + encodeURIComponent(state.inst)); }
+  catch (e) { $("#instBody").innerHTML = `<div class="card empty">${esc(e.message)}</div>`; return; }
+  $("#instBook").classList.toggle("hidden", !d.canRequestBook || d.hasBook);
+  $("#instRelease").classList.toggle("hidden", !d.canRequestBook || !d.hasBook);
+  const win = d.windows.map((w) => {
+    const ratio = w.thresholdPct ? Math.min(1, Math.abs(w.dropPct) / w.thresholdPct) : 0;
+    const hit = w.thresholdPct && -w.dropPct >= w.thresholdPct;
+    return `<tr><td>${w.window}</td><td class="num">${w.thresholdPct ? w.thresholdPct + "%" : "выкл"}</td>
+      <td class="num ${pctCls(w.dropPct)}">${fmtPct(w.dropPct)}</td>
+      <td style="width:40%"><div class="track" style="background:var(--panel2);height:8px;border-radius:4px"><div style="height:100%;width:${ratio * 100}%;border-radius:4px;background:${hit ? "var(--red)" : "var(--accent)"}"></div></div></td>
+      <td class="num">${fmtPx(w.high)}</td></tr>`;
+  });
+  const b = d.book;
+  const bookHtml = b ? `<div class="kv">
+      <span>фильтр 1M</span><span class="${b.passed ? "pos" : "neg"}">${b.passed ? "проходит" : "не проходит"}</span>
+      <span>bid / ask</span><span>${fmtMoney(b.bidNotional)} / ${fmtMoney(b.askNotional)}</span>
+      <span>всего</span><span>${fmtMoney(b.totalNotional)}</span><span>imbalance</span><span>${fmtRatio(b.imbalance)}</span>
+      <span>лучший bid / ask</span><span>${fmtPx(b.bestBid)} / ${fmtPx(b.bestAsk)}</span>
+      <span>уровней</span><span>${b.levels}${b.fullDepth ? "" : " (неполный)"}</span>
+      <span>возраст</span><span class="${b.fresh ? "" : "amber"}">${fmtDur(b.ageS)}${b.fresh ? "" : " — протух"}</span>
+      <span>стена</span><span>${b.wall ? `${fmtPx(b.wall.px)} × ${fmtMoney(b.wall.notional)} (${fmtRatio(b.wall.ratio)}×)` : "нет"}</span></div>`
+    : `<div class="empty">${d.hasBook ? "Стакан подписан, ждём первый снимок" : "Стакан не подключён — он подключается под дамп или кнопкой выше"}</div>`;
+  const sig = d.signals ? `<b>${d.signals.score}/3</b> (нужно ${d.signals.minScore}) ${d.signals.hits.map((h) => `<span class="tag">${esc(h)}</span>`).join("") || '<span class="muted">ни одной</span>'}` : '<span class="muted">без стакана не считаются</span>';
+  const cd = Object.entries(d.cooldownLeftS);
+  $("#instBody").innerHTML = `
+    <div class="grid g4">
+      <div class="card"><h3>Цена</h3><div class="kpi">${fmtPx(d.price)}</div><div class="muted">сделка ${d.lastTradeAgeS == null ? "—" : fmtDur(d.lastTradeAgeS) + " назад"}</div></div>
+      <div class="card"><h3>Оборот 24 ч</h3><div class="kpi">${fmtMoney(d.turnover)}</div><div class="muted">${esc(d.instType)} · ctVal ${d.ctVal}</div></div>
+      <div class="card"><h3>Эпизод просадки</h3>${d.episode ? `<div class="kpi neg">${fmtPct(d.episode.maxDropPct)}</div><div>${statusTag(d.episode.status)} <span class="muted">${esc(d.episode.detail)} · ${fmtDur(d.episode.durationS)}</span></div>` : '<div class="kpi muted">—</div><div class="muted">сейчас не в просадке</div>'}</div>
+      <div class="card"><h3>Кулдаун</h3>${cd.length ? cd.map(([w, s]) => `<div>${esc(w)}: ещё ${fmtDur(s)}</div>`).join("") : '<div class="muted">нет — алерт уйдёт сразу</div>'}</div>
+    </div>
+    <div class="card" style="margin-top:14px"><h3>1m-свечи <span class="hint muted">последние ${d.candles.length}</span></h3>${chart(d.candles)}</div>
+    <div class="grid g3" style="margin-top:14px">
+      <div class="card"><h3>Окна просадки</h3>${table(["Окно", "#Порог", "#Сейчас", "", "#Максимум"], win)}</div>
+      <div class="card"><h3>Стакан</h3>${bookHtml}<div style="margin-top:8px">Сигнатуры: ${sig}</div></div>
+      <div class="card"><h3>Поток и ликвидации</h3><div class="kv">
+        <span>CVD ${d.cvd.windowS} с</span><span class="${pctCls(d.cvd.cvd)}">${fmtMoney(d.cvd.cvd)}</span>
+        <span>покупки / продажи</span><span>${fmtMoney(d.cvd.buy)} / ${fmtMoney(d.cvd.sell)}</span>
+        <span>taker buy/sell</span><span>${fmtRatio(d.cvd.takerRatio)}</span><span>разворот</span><span>${fmtRatio(d.cvd.reversalRatio)}</span>
+        <span>ликвидации было</span><span>${fmtMoney(d.liq.earlier)}</span><span>стало</span><span>${fmtMoney(d.liq.recent)}</span>
+        <span>затухание</span><span>${fmtRatio(d.liq.decayRatio)}</span></div></div>
+    </div>
+    <div class="card" style="margin-top:14px"><h3>Алерты по инструменту</h3>${alertsTable(d.alerts, "Алертов по этому инструменту не было")}</div>`;
+}
+
+function chart(candles) {
+  if (!candles.length) return `<div class="empty">Свечей нет</div>`;
+  const W = 1000, H = 220, P = 6;
+  const lo = Math.min(...candles.map((c) => c[3])), hi = Math.max(...candles.map((c) => c[2]));
+  const span = hi - lo || hi || 1;
+  const y = (v) => P + (H - 2 * P) * (1 - (v - lo) / span);
+  const step = (W - 60) / candles.length;
+  const bars = candles.map((c, i) => {
+    const x = i * step + step / 2;
+    const up = c[4] >= c[1];
+    const col = up ? "#3ecf8e" : "#ff5d5d";
+    const top = y(Math.max(c[1], c[4])), bot = y(Math.min(c[1], c[4]));
+    return `<line x1="${x}" x2="${x}" y1="${y(c[2])}" y2="${y(c[3])}" stroke="${col}" stroke-width="1"/>
+      <rect x="${x - step * 0.35}" y="${top}" width="${Math.max(1, step * 0.7)}" height="${Math.max(1, bot - top)}" fill="${col}"/>`;
+  }).join("");
+  const t0 = new Date(candles[0][0] * 1000).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+  const t1 = new Date(candles[candles.length - 1][0] * 1000).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+  return `<svg viewBox="0 0 ${W} ${H + 16}" width="100%" preserveAspectRatio="none" style="height:240px">${bars}
+    <text x="${W - 55}" y="${y(hi) + 10}">${fmtPx(hi)}</text><text x="${W - 55}" y="${y(lo)}">${fmtPx(lo)}</text>
+    <text x="0" y="${H + 14}">${t0}</text><text x="${W - 110}" y="${H + 14}">${t1}</text></svg>`;
+}
+
+// ---------- настройки ----------
+const FIELDS = [
+  ["Окна просадки, % от максимума окна", [["windows", "1m"], ["windows", "5m"], ["windows", "30m"], ["windows", "1h"], ["windows", "2h"]]],
+  ["Стакан", [
+    ["depth", "min_notional_usdt", "Мин. глубина top-20, USDT"],
+    ["depth", "wall_multiplier", "Стена: во сколько раз больше среднего"],
+    ["depth", "wall_min_notional_usdt", "Стена: мин. номинал, USDT"],
+    ["depth", "wall_persist_s", "Стена должна простоять, с"],
+    ["depth", "book_slots", "Слотов стакана"],
+    ["depth", "book_ttl_s", "Слот живёт после дампа, с"],
+    ["depth", "mode", "Режим стакана", ["ondemand", "top", "all"]],
+  ]],
+  ["Поток агрессора (CVD)", [
+    ["cvd", "window_s", "Окно CVD, с"],
+    ["cvd", "burst_s", "Окно всплеска, с"],
+    ["cvd", "reversal_ratio", "Разворот: доля откупа"],
+    ["cvd", "taker_buy_ratio", "Taker buy/sell не ниже"],
+  ]],
+  ["Ликвидации", [
+    ["liquidation", "window_s", "Окно, с"],
+    ["liquidation", "decay_ratio", "Затухание: стало/было не выше"],
+    ["liquidation", "min_notional_usdt", "Мин. объём ликвидаций, USDT"],
+  ]],
+  ["Алерт", [
+    ["signals", "min_score", "Мин. число сигнатур (из 3)"],
+    ["alerts", "cooldown_s", "Кулдаун на инструмент и окно, с"],
+  ]],
+  ["Рынок", [
+    ["market", "min_turnover_usdt", "Мин. оборот за 24 ч, USDT"],
+    ["market", "top_n", "Топ-N по обороту (0 = весь рынок)"],
+  ]],
+  ["Движок", [
+    ["engine", "eval_interval_s", "Оценка каждые, с"],
+    ["engine", "warmup_s", "Прогрев после старта, с"],
+    ["dashboard", "episode_gap_s", "Эпизод дампа закрывается через, с"],
+  ]],
+];
+const isRestart = (sec, key) => sec === "market" || (sec === "depth" && ["mode", "source", "levels", "poll_interval_s"].includes(key))
+  || (sec === "dashboard" && key !== "episode_gap_s");
+
+async function loadConfig() {
+  const r = await api("/api/config");
+  state.cfg = r.config;
+  $("#cfgNote").innerHTML = r.path
+    ? `<div class="banner warn" style="color:var(--muted);background:var(--panel);border-color:var(--line)">Изменения записываются в <b>${esc(r.path)}</b> и применяются сразу; поля с пометкой «перезапуск» — после перезапуска.</div>`
+    : `<div class="banner warn">Сканер запущен без <b>-c config.json</b>: изменения применятся сразу, но в файл не сохранятся и пропадут после перезапуска.</div>`;
+  $("#cfgForm").innerHTML = FIELDS.map(([title, items]) => `<div class="card"><h3>${esc(title)}</h3>${items.map(([sec, key, label, opts]) => {
+    const val = sec === "windows" ? (r.config.windows[key] ?? "") : r.config[sec][key];
+    const id = `cf-${sec}-${key}`;
+    const input = opts
+      ? `<select id="${id}" data-sec="${sec}" data-key="${key}">${opts.map((o) => `<option ${o === val ? "selected" : ""}>${o}</option>`).join("")}</select>`
+      : `<input id="${id}" type="number" step="any" min="0" data-sec="${sec}" data-key="${key}" value="${esc(val)}" ${sec === "windows" ? 'placeholder="выкл"' : ""}>`;
+    return `<label class="field"><span>${esc(label || "окно " + key)}${isRestart(sec, key) ? '<span class="restart">перезапуск</span>' : ""}</span>${input}</label>`;
+  }).join("")}</div>`).join("");
+  $("#cfgRaw").value = JSON.stringify(r.file ?? r.config, null, 2);
+  $("#cfgRawHint").textContent = r.path
+    ? `содержимое ${r.path}: ключи накладываются на файл, без CLI-переопределений`
+    : "действующий конфиг (файла нет — изменения живут до перезапуска)";
+  markDirty();
+}
+
+function formPatch() {
+  const patch = {};
+  const windows = { ...state.cfg.windows };
+  let winChanged = false;
+  document.querySelectorAll("#cfgForm [data-sec]").forEach((el) => {
+    const sec = el.dataset.sec, key = el.dataset.key;
+    if (sec === "windows") {
+      const v = el.value.trim();
+      const old = state.cfg.windows[key];
+      if (v === "" && old != null) { delete windows[key]; winChanged = true; }
+      else if (v !== "" && +v !== old) { windows[key] = +v; winChanged = true; }
+      return;
+    }
+    const old = state.cfg[sec][key];
+    const v = el.tagName === "SELECT" ? el.value : el.value.trim() === "" ? old : +el.value;
+    if (v !== old) (patch[sec] ||= {})[key] = v;
+  });
+  if (winChanged) patch.windows = windows;
+  return patch;
+}
+
+function markDirty() {
+  if (!state.cfg) return;
+  const patch = formPatch();
+  document.querySelectorAll("#cfgForm .field").forEach((f) => {
+    const el = f.querySelector("[data-sec]");
+    const sec = el.dataset.sec, key = el.dataset.key;
+    const changed = sec === "windows" ? (patch.windows && patch.windows[key] !== state.cfg.windows[key]) : patch[sec] && key in patch[sec];
+    f.classList.toggle("changed", !!changed);
+  });
+  const n = document.querySelectorAll("#cfgForm .field.changed").length;
+  $("#cfgDirty").textContent = n ? `изменено полей: ${n}` : "";
+}
+
+async function savePatch(patch) {
+  if (!Object.keys(patch).length) { toast("Нечего сохранять"); return; }
+  try {
+    const r = await put("/api/config", patch);
+    toast(r.saved ? `Сохранено в ${r.path} и применено` : "Применено (без сохранения в файл)", "ok");
+    if (r.restartRequired.length) toast("Нужен перезапуск для: " + r.restartRequired.join(", "));
+    await loadConfig();
+  } catch (e) { toast("Не сохранено: " + e.message, "err"); }
+}
+const put = (path, body) => api(path, { method: "PUT", body: JSON.stringify(body) });
+
+// ---------- журнал ----------
+async function refreshLogs() {
+  const recs = await api(`/api/logs?after=${state.logSeq}&limit=500`);
+  if (!recs.length) return;
+  state.logSeq = recs[recs.length - 1].seq;
+  state.logs.push(...recs);
+  if (state.logs.length > 3000) state.logs.splice(0, state.logs.length - 3000);
+  renderLogs();
+}
+function renderLogs() {
+  const lv = { "": 0, WARNING: 30, ERROR: 40 }[$("#logLevel").value];
+  const num = { DEBUG: 10, INFO: 20, WARNING: 30, ERROR: 40, CRITICAL: 50 };
+  const text = $("#logFilter").value.trim().toLowerCase();
+  const box = $("#logs");
+  box.innerHTML = state.logs
+    .filter((r) => num[r.level] >= lv && (!text || (r.msg + r.name).toLowerCase().includes(text)))
+    .slice(-1500)
+    .map((r) => `<div class="lv-${r.level}">${new Date(r.ts * 1000).toLocaleTimeString("ru-RU")} ${r.level.padEnd(7)} ${esc(r.name)}: ${esc(r.msg)}</div>`)
+    .join("");
+  if ($("#logFollow").checked) box.scrollTop = box.scrollHeight;
+}
+
+// ---------- вкладки и цикл ----------
+function switchTab(tab) {
+  TAB = tab;
+  document.querySelectorAll("#tabs button").forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
+  document.querySelectorAll("main > section").forEach((s) => s.classList.toggle("hidden", s.id !== "tab-" + tab));
+  lastHistAt = 0;
+  if (tab === "overview") lastStatsAt = 0;
+  if (tab === "settings") loadConfig().catch((e) => toast(e.message, "err"));
+  if (tab === "instrument" && !$("#instList").children.length) loadInstList().catch(() => {});
+  refreshTab().catch((e) => toast(e.message, "err"));
+}
+
+async function refreshTab() {
+  if (!STATUS) return;
+  if (TAB === "overview") return refreshOverview();
+  if (TAB === "logs") return refreshLogs();
+  if (TAB === "instrument") return refreshInstrument();
+  if ((TAB === "alerts" || TAB === "episodes") && Date.now() - lastHistAt > 15000) {
+    lastHistAt = Date.now();
+    if (!STATUS.history) return;
+    return TAB === "alerts" ? refreshAlerts() : refreshEpisodes();
+  }
+}
+
+async function tick() {
+  try {
+    STATUS = await api("/api/status");
+    if (!ONLINE) { ONLINE = true; toast("Связь со сканером восстановлена", "ok"); lastStatsAt = 0; }
+    renderHeader();
+    await refreshTab();
+  } catch (e) {
+    if (ONLINE) { ONLINE = false; if (STATUS) renderHeader(); }
+  }
+  setTimeout(tick, 3000);
+}
+
+// ---------- действия ----------
+async function doRestart() {
+  if (!confirm("Перезапустить сканер? Загрузка инструментов займёт до минуты, интерфейс переподключится сам.")) return;
+  try { await post("/api/control/restart"); toast("Перезапускаю…"); } catch (e) { toast(e.message, "err"); }
+}
+$("#btnRestart").onclick = doRestart;
+$("#btnStop").onclick = async () => {
+  if (!confirm("Остановить сканер? Запустить снова можно только из терминала.")) return;
+  try { await post("/api/control/stop"); toast("Сканер останавливается"); } catch (e) { toast(e.message, "err"); }
+};
+$("#btnMute").onclick = async () => {
+  try { const r = await post("/api/control/mute", { muted: !STATUS.muted }); STATUS.muted = r.muted; renderHeader(); } catch (e) { toast(e.message, "err"); }
+};
+$("#btnTg").onclick = async () => {
+  try { const r = await post("/api/control/telegram-test"); toast(r.ok ? `Отправлено в чатов: ${r.delivered}` : "Не доставлено", r.ok ? "ok" : "err"); } catch (e) { toast(e.message, "err"); }
+};
+$("#instGo").onclick = () => $("#instInput").value.trim() && openInst($("#instInput").value);
+$("#instInput").addEventListener("keydown", (e) => { if (e.key === "Enter" && e.target.value.trim()) openInst(e.target.value); });
+$("#instBook").onclick = async () => {
+  try { await post("/api/control/book", { instId: state.inst, op: "request" }); toast("Стакан запрошен — слот выдадут в течение секунды", "ok"); } catch (e) { toast(e.message, "err"); }
+};
+$("#instRelease").onclick = async () => {
+  try { await post("/api/control/book", { instId: state.inst, op: "release" }); toast("Слот освобождён", "ok"); refreshInstrument(); } catch (e) { toast(e.message, "err"); }
+};
+$("#instCooldown").onclick = async () => {
+  if (!state.inst) return;
+  try { await post("/api/control/cooldown-reset", { instId: state.inst }); toast("Кулдаун сброшен", "ok"); refreshInstrument(); } catch (e) { toast(e.message, "err"); }
+};
+$("#cfgSave").onclick = () => savePatch(formPatch());
+$("#cfgReset").onclick = () => loadConfig();
+$("#cfgForm").addEventListener("input", markDirty);
+$("#cfgRawApply").onclick = () => {
+  let parsed;
+  try { parsed = JSON.parse($("#cfgRaw").value); } catch (e) { toast("Невалидный JSON: " + e.message, "err"); return; }
+  savePatch(parsed);
+};
+$("#logLevel").onchange = renderLogs;
+$("#logFilter").oninput = renderLogs;
+$("#logClear").onclick = () => { state.logs = []; renderLogs(); };
+for (const [p, fn] of [["al", refreshAlerts], ["ep", refreshEpisodes]]) {
+  $(`#${p}Prev`).onclick = () => { state[p + "Offset"] = Math.max(0, state[p + "Offset"] - PAGE); fn(); };
+  $(`#${p}Next`).onclick = () => { state[p + "Offset"] += PAGE; fn(); };
+}
+for (const id of ["fAlInst", "fAlWin", "fAlHours", "fAlScore"]) $("#" + id).addEventListener(id === "fAlInst" ? "input" : "change", () => { state.alOffset = 0; refreshAlerts(); });
+for (const id of ["fEpInst", "fEpStatus", "fEpAlerted", "fEpHours"]) $("#" + id).addEventListener(id === "fEpInst" ? "input" : "change", () => { state.epOffset = 0; refreshEpisodes(); });
+document.querySelectorAll("#tabs button").forEach((b) => (b.onclick = () => switchTab(b.dataset.tab)));
+$("#modal").addEventListener("click", (e) => { if (e.target.id === "modal") closeModal(); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeModal(); });
+document.addEventListener("click", (e) => {
+  const rel = e.target.closest("[data-release]");
+  if (rel) {
+    e.stopPropagation();
+    post("/api/control/book", { instId: rel.dataset.release, op: "release" }).then(() => toast("Слот освобождён", "ok")).catch((err) => toast(err.message, "err"));
+    return;
+  }
+  const al = e.target.closest("[data-alert]");
+  if (al) { openAlert(al.dataset.alert).catch((err) => toast(err.message, "err")); return; }
+  const inst = e.target.closest("[data-inst]");
+  if (inst) { e.preventDefault(); openInst(inst.dataset.inst); }
+});
+
+tick();
+</script>
+</body>
+</html>

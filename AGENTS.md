@@ -19,7 +19,8 @@ ruff check                                          # линтер (E, F, W, I; 
 
 python -m scanner.main --print-config               # итоговый конфиг
 python -m scanner.diag -s BTC,ETH --seconds 30      # живой поток: что доходит до детекции
-python -m scanner.main --dry-run -s BTC,ETH         # сканер без Telegram/вебхука
+python -m scanner.main --dry-run -s BTC,ETH         # сканер без Telegram/вебхука; дашборд на :8787
+python -m scanner.main --dry-run -s BTC,ETH --port 8788   # второй экземпляр рядом с рабочим
 
 python tools/liquidity_probe.py --rounds 5          # кто проходит фильтр 1M USDT и насколько стабильно
 python tools/channel_cost.py --seconds 60           # трафик trades/books5/books на живом рынке
@@ -45,9 +46,12 @@ REST (universe.py) ──► InstrumentState × N ◄── WsRouter ◄── O
                               │                                   ▲
        eval каждые 2 c        ▼                                   │ subscribe / unsubscribe / resubscribe books
    evaluate_instrument() ─► Alert ─► AlertRouter ─► sinks         │
-              │                                                   │
+              │  │                 └──► History (SQLite)          │
+              │  └─ observe(статус) ─► DropMonitor ─► History     │
               └─ DropSeen (просадка, стакана нет) ─► DepthScheduler ──┘
                                                      DepthGuard (ресинк seqId / протухших) ──┘
+
+Dashboard (aiohttp.web, :8787) читает Engine / History / LogBuffer, пишет конфиг → Engine.apply_config
 ```
 
 | Модуль | Ответственность |
@@ -71,7 +75,12 @@ REST (universe.py) ──► InstrumentState × N ◄── WsRouter ◄── O
 | `state.py` | `state.json`: бакеты трейдов, ликвидации, кулдаун (атомарная запись, TTL 15 мин) |
 | `env.py` | загрузка `.env` без зависимостей (переменные процесса приоритетнее) |
 | `aio.py` | `sleep_or_stop` — ожидание с выходом по `asyncio.Event` |
-| `diag.py`, `main.py`, `__main__.py` | диагностика и CLI |
+| `dashboard.py` | веб-дашборд: `Dashboard(engine).run(stop)`, JSON API `/api/*`, middleware защиты, `apply_patch` (правка конфига), `validate_patch`, управление (`/api/control/*`) |
+| `web/index.html` | фронтенд дашборда: один файл, vanilla JS, опрос API раз в 3 c; всё из данных экранируется `esc()` |
+| `history.py` | `History`: SQLite (таблицы `alerts`, `episodes`), фильтры, `stats`, импорт `alerts.jsonl` в пустую базу |
+| `monitor.py` | `DropMonitor` / `DropEpisode`: эпизод просадки от первого попадания до `episode_gap_s` тишины |
+| `logbuffer.py` | `LogBuffer` — кольцевой буфер лога; `install()` один раз на процесс |
+| `diag.py`, `main.py`, `__main__.py` | диагностика и CLI; `main.py` крутит цикл перезапуска движка (`Engine.restart_requested`) |
 
 Тесты — `tests/test_<модуль>.py`, общие фабрики — `tests/conftest.py`
 (`make_candles`, `make_book_summary`, фикстура `now`).
@@ -94,6 +103,31 @@ REST (universe.py) ──► InstrumentState × N ◄── WsRouter ◄── O
 `DepthGuard` чинит только стаканы, которыми кто-то владеет (`Engine._guard_owns`):
 статические из `top` и слоты планировщика старше `BOOK_GRACE_S` (5 c, ждём первый snapshot).
 Иначе сторож вернул бы `books` инструменту без слота в обход планировщика.
+
+## Дашборд — что легко сломать
+
+- **Безопасность.** Через API можно менять пороги и остановить сканер. Middleware `_guard`:
+  на loopback проверяет `Host` (DNS rebinding), у изменяющих запросов требует
+  `Content-Type: application/json` и свой `Origin` (CSRF с чужой страницы), при заданном
+  токене (`dashboard.token_env`) — `Authorization: Bearer`. На не-loopback адресе без токена
+  сервер не стартует. Новые изменяющие ручки — только `POST`/`PUT` за этим middleware.
+- **Правка конфига накладывается на файл, а не на `engine.cfg`.** В действующем конфиге есть
+  CLI-переопределения (`-s`, `--no-telegram`), и запись `dump_config()` в файл навсегда
+  зашила бы их и все дефолты. Поэтому `apply_patch`: `read_config_file` → `merge_config` →
+  `write_config_file` → `watcher.mark_seen()` → `engine.apply_config`. «Нужен перезапуск»
+  сообщается только для полей, которые правка реально трогает (`_touches`), иначе `-s`
+  выглядел бы как изменённый `market`.
+- **`windows` в `merge_config` заменяется целиком** — иначе выключить окно было бы нельзя.
+- **Причины отсева — через `observe`** в `evaluate_instrument` (статусы `STATUS_*`). Функция
+  остаётся чистой: колбэк необязательный, тесты без него не меняются.
+- **`History` открывается в `Engine.run()`, не в `__init__`**: тесты создают `Engine` без
+  файловой системы. Ошибки записи истории глотаются в `_record` — оценка важнее.
+- **Задача дашборда не под `_on_task_done`**: падение веб-сервера (занят порт) не должно
+  останавливать сканирование. Дашборд стартует до `_bootstrap`, чтобы отвечать во время загрузки.
+- **Перезапуск** = `Engine.request_restart()` → `main.py` заново читает конфиг из файла и
+  применяет CLI-переопределения. Python-модули при этом не перезагружаются: после правки кода
+  нужен перезапуск процесса.
+- `diag.py` выключает дашборд: он работает рядом с рабочим сканером, порт и база заняты.
 
 ## Инварианты (каждый оплачен багом — не ломать)
 
@@ -127,7 +161,12 @@ REST (universe.py) ──► InstrumentState × N ◄── WsRouter ◄── O
 - **Новый компонент с конфигом:** держит ссылку `self.cfg`; добавить переприсваивание в
   `Engine._apply_config`, иначе горячая перезагрузка его не затронет.
 - **Новый WS-канал:** обработчик в `WsRouter._handlers` и имя в `PUBLIC_CHANNELS` /
-  `BUSINESS_CHANNELS` в `okx_ws.py`.
+ `BUSINESS_CHANNELS` в `okx_ws.py`.
+- **Новый порог в дашборде:** строка в `FIELDS` в `web/index.html`; если поле «только с
+ рестартом» — ещё `isRestart()` там же и `RESTART_KEYS` / `_touches` в `dashboard.py`.
+- **Новая ручка API:** метод `Dashboard`, маршрут в `build_app`, ответ через `_json()`
+ (он вычищает `inf`/`nan`, которые ломают `JSON.parse`), тест в `tests/test_dashboard.py`
+ через `aiohttp.test_utils.TestServer` внутри `asyncio.run`.
 - **Время:** функции с логикой принимают `now: float | None = None` — тесты передают
   фиксированное `now` (`1_700_000_000.0`) вместо `time.time()`. Сохранять этот стиль.
 - **Тесты без сети.** Потоки и REST подменяются фейками с нужными методами (см.

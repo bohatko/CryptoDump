@@ -143,11 +143,23 @@ class AlertRouter:
         self.dry_run = dry_run
         self.cooldown = Cooldown(cfg.cooldown_s)
         self.sinks: list[Sink] = []
+        self.sink_names: list[str] = []
         for name in cfg.sinks:
             sink = self._make_sink(name)
             if sink is not None:
                 self.sinks.append(sink)
+                self.sink_names.append(name)
         self.sent = 0
+        # тихий режим (из дашборда): алерты пишутся в консоль/JSONL/историю, но не
+        # уходят наружу — удобно, пока крутишь пороги и не хочешь спамить в чат
+        self.muted = False
+
+    @property
+    def telegram_client(self) -> TelegramClient | None:
+        for sink in self.sinks:
+            if isinstance(sink, TelegramSink):
+                return sink.client
+        return None
 
     def _make_sink(self, name: str) -> Sink | None:
         if name == "console":
@@ -177,7 +189,8 @@ class AlertRouter:
         if not self.cooldown.allow(alert.inst_id, alert.window_label, now=alert.ts):
             log.debug("кулдаун: %s %s", alert.inst_id, alert.window_label)
             return False
-        results = await asyncio.gather(*(s.emit(alert) for s in self.sinks), return_exceptions=True)
+        sinks = [s for s in self.sinks if not (self.muted and isinstance(s, (TelegramSink, WebhookSink)))]
+        results = await asyncio.gather(*(s.emit(alert) for s in sinks), return_exceptions=True)
         for res in results:
             if isinstance(res, Exception):
                 log.warning("синк упал: %s", res)

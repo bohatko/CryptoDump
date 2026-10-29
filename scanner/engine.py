@@ -9,8 +9,10 @@
                             (REST /market/books только при depth.source == "rest")
 
     eval  (каждые engine.eval_interval_s): evaluate_instrument() → AlertRouter.publish
+                                           + DropMonitor (эпизоды просадки) → History (SQLite)
     reload (engine.reload_interval_s):     ConfigWatcher → _apply_config
     state  (engine.state_save_interval_s): state.json
+    dashboard (dashboard.enabled):         веб-интерфейс на aiohttp, поднимается до бутстрапа
 
     * На каких инструментах подписан ``books``, решает ``depth.mode``:
       ``all`` — на всех; ``top`` — на ``book_slots`` самых оборотных, постоянно;
@@ -26,6 +28,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from dataclasses import replace
+from typing import Callable
 
 from .aio import sleep_or_stop
 from .alerts import AlertRouter
@@ -33,9 +37,11 @@ from .config import Config, ConfigWatcher
 from .depth_guard import DepthGuard
 from .depth_scheduler import DepthScheduler
 from .evaluate import DropSeen, evaluate_instrument
+from .history import History
 from .instrument import InstrumentState
 from .market import OkxRest
 from .models import Alert
+from .monitor import DropMonitor
 from .okx_ws import OkxPublicStream, Subscription, liquidations, per_instrument, split_by_endpoint
 from .state import load_state, save_state
 from .universe import bootstrap_candles, build_universe
@@ -71,6 +77,14 @@ class Engine:
         self.router = WsRouter(self.states, cfg, on_book_gap=self.depth.schedule_resync)
         self._streams: list[OkxPublicStream] = []
         self._started_at = 0.0
+        self.monitor = DropMonitor(gap_s=cfg.dashboard.episode_gap_s)
+        # база открывается в run(), а не здесь: тесты создают Engine без файловой системы
+        self.history: History | None = None
+        self.phase = "старт"
+        self.last_eval_at = 0.0
+        self.last_eval_ms = 0.0
+        # main.py пересоздаёт движок, если остановка запрошена как перезапуск (дашборд)
+        self.restart_requested = False
 
     # ---------- кто владеет стаканом ----------
 
@@ -108,9 +122,15 @@ class Engine:
         )
         await self.rest.start()
         self._started_at = time.time()
+        self._open_history()
+        # дашборд поднимаем до бутстрапа: загрузка вселенной идёт десятки секунд,
+        # и всё это время интерфейс должен отвечать
+        dashboard = self._start_dashboard()
         try:
+            self.phase = "загрузка инструментов"
             await self._bootstrap()
             self._restore_state()
+            self.phase = "работает"
             tasks = [
                 asyncio.create_task(self._stream_loop(), name="ws"),
                 asyncio.create_task(self.depth.run(), name="depth"),
@@ -126,15 +146,21 @@ class Engine:
             for task in tasks:
                 task.add_done_callback(self._on_task_done)
             await self._stop.wait()
+            self.phase = "остановка"
             log.info("останавливаюсь…")
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
         finally:
+            self._stop.set()
+            if dashboard is not None:
+                dashboard.cancel()
+                await asyncio.gather(dashboard, return_exceptions=True)
             await self.alerts.close()
             await self.rest.close()
             # в потоке: файл может быть занят, а блокировать event loop на выходе не нужно
             await asyncio.to_thread(self._save_state)
+            self._close_history()
             log.info("остановлено, алертов отправлено: %d", self.alerts.sent)
 
     def _on_task_done(self, task: asyncio.Task) -> None:
@@ -148,6 +174,62 @@ class Engine:
 
     def stop(self) -> None:
         self._stop.set()
+
+    def request_restart(self) -> None:
+        """Остановиться так, чтобы main.py собрал движок заново с конфигом из файла."""
+        self.restart_requested = True
+        self._stop.set()
+
+    @property
+    def started_at(self) -> float:
+        return self._started_at
+
+    @property
+    def streams(self) -> list[OkxPublicStream]:
+        return list(self._streams)
+
+    @property
+    def static_books(self) -> set[str]:
+        return set(self._static_books)
+
+    def has_book(self, inst_id: str) -> bool:
+        return self._has_book(inst_id)
+
+    # ---------- дашборд и история ----------
+
+    def _start_dashboard(self) -> asyncio.Task | None:
+        if not self.cfg.dashboard.enabled:
+            return None
+        from .dashboard import Dashboard  # aiohttp.web нужен только при включённом дашборде
+
+        # без _on_task_done: сбой веб-сервера не должен останавливать сканирование
+        return asyncio.create_task(Dashboard(self).run(self._stop), name="dashboard")
+
+    def _open_history(self) -> None:
+        if not self.cfg.dashboard.enabled or not self.cfg.dashboard.history_path:
+            return
+        try:
+            self.history = History(self.cfg.dashboard.history_path)
+            if "jsonl" in self.cfg.alerts.sinks:
+                self.history.import_jsonl(self.cfg.alerts.jsonl_path)
+        except Exception:  # noqa: BLE001 — без истории сканер работает, дашборд покажет пусто
+            log.exception("не удалось открыть историю %s", self.cfg.dashboard.history_path)
+            self.history = None
+
+    def _close_history(self) -> None:
+        if self.history is None:
+            return
+        self._record(lambda h: [h.add_episode(ep) for ep in self.monitor.drain()])
+        self.history.close()
+        self.history = None
+
+    def _record(self, write: Callable[[History], object]) -> None:
+        if self.history is None:
+            return
+        try:
+            write(self.history)
+        except Exception:  # noqa: BLE001 — сбой записи истории не должен ронять оценку
+            log.exception("ошибка записи истории")
 
     # ---------- бутстрап ----------
 
@@ -293,6 +375,7 @@ class Engine:
         # считаем синхронно (это дёшево), а отправку алертов делаем параллельно:
         # вебхук может тормозить до таймаута, и он не должен задерживать оценку
         # остальных инструментов
+        started = time.perf_counter()
         alerts: list[Alert] = []
         scheduler = self.depth_scheduler
         for state in list(self.states.values()):
@@ -300,7 +383,13 @@ class Engine:
                 # в режимах ondemand/top стакан есть не у всех — тогда оценка
                 # вернёт DropSeen, и мы запросим слот вместо пропуска дампа
                 result = evaluate_instrument(
-                    state, self.cfg, now=now, depth_available=self._has_book(state.inst_id)
+                    state,
+                    self.cfg,
+                    now=now,
+                    depth_available=self._has_book(state.inst_id),
+                    observe=lambda drop, status, detail, iid=state.inst_id: self.monitor.observe(
+                        iid, drop, status, detail, now=now
+                    ),
                 )
             except Exception:  # noqa: BLE001 — один инструмент не должен ломать проход
                 log.exception("ошибка оценки %s", state.inst_id)
@@ -319,12 +408,20 @@ class Engine:
                     # дампа тоже отработала на актуальных данных
                     scheduler.want(state.inst_id, drop_pct=result.drop_pct, now=now)
 
+        closed = self.monitor.sweep(now=now)
+        if closed:
+            self._record(lambda h: [h.add_episode(ep) for ep in closed])
+        self.last_eval_at = now
+        self.last_eval_ms = (time.perf_counter() - started) * 1000.0
+
         if alerts:
             await asyncio.gather(*(self._publish(alert) for alert in alerts), return_exceptions=True)
         return alerts
 
     async def _publish(self, alert: Alert) -> None:
         published = await self.alerts.publish(alert)
+        if published:
+            self._record(lambda h: h.add_alert(alert))
         if published and alert.sibling_windows:
             # остальные сработавшие окна того же дампа гасим, чтобы не спамить
             self.alerts.cooldown.suppress(alert.inst_id, alert.sibling_windows, now=alert.ts)
@@ -341,6 +438,10 @@ class Engine:
             if fresh is not None:
                 self._apply_config(fresh)
 
+    def apply_config(self, fresh: Config) -> None:
+        """Применить конфиг на лету (дашборд); поля «только с рестартом» останутся прежними."""
+        self._apply_config(fresh)
+
     def _apply_config(self, fresh: Config) -> None:
         restart = self.cfg.restart_required_changes(fresh)
         if restart:
@@ -355,6 +456,7 @@ class Engine:
             fresh.depth.poll_interval_s = self.cfg.depth.poll_interval_s
             fresh.depth.source = self.cfg.depth.source
             fresh.depth.mode = self.cfg.depth.mode
+            fresh.dashboard = replace(self.cfg.dashboard, episode_gap_s=fresh.dashboard.episode_gap_s)
         self.cfg = fresh
         # компоненты держат ссылку на конфиг — без этого они работали бы на старых порогах
         self.router.cfg = fresh
@@ -362,6 +464,7 @@ class Engine:
         if self.depth_scheduler is not None:
             self.depth_scheduler.cfg = fresh
         self.alerts.cooldown.cooldown_s = fresh.alerts.cooldown_s
+        self.monitor.gap_s = fresh.dashboard.episode_gap_s
         log.info("пороги обновлены: %s", [f"{w}@{t}%" for w, t in fresh.window_thresholds()])
 
     async def _duration_loop(self, duration_s: float) -> None:

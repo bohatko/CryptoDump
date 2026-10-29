@@ -6,7 +6,7 @@ import json
 import logging
 import os
 import time
-from dataclasses import dataclass, field, fields, is_dataclass
+from dataclasses import dataclass, field, fields, is_dataclass, replace
 from pathlib import Path
 from typing import Any, get_type_hints
 
@@ -142,6 +142,23 @@ class EngineConfig:
 
 
 @dataclass
+class DashboardConfig:
+    enabled: bool = True
+    # По умолчанию только локальный доступ. На другой адрес дашборд поднимется лишь
+    # с токеном: через него можно менять пороги и останавливать сканер.
+    host: str = "127.0.0.1"
+    port: int = 8787
+    # имя переменной окружения с токеном доступа (переменная не задана — без токена)
+    token_env: str = "DASHBOARD_TOKEN"
+    # история алертов и эпизодов просадки (SQLite из стандартной библиотеки)
+    history_path: str = "history.sqlite3"
+    # эпизод просадки закрывается, если инструмент столько секунд не был в просадке
+    episode_gap_s: float = 60.0
+    # сколько последних записей лога держать для вкладки «Журнал»
+    log_buffer: int = 1000
+
+
+@dataclass
 class Config:
     market: MarketConfig = field(default_factory=MarketConfig)
     windows: dict[str, float] = field(
@@ -153,6 +170,7 @@ class Config:
     signals: SignalsConfig = field(default_factory=SignalsConfig)
     alerts: AlertsConfig = field(default_factory=AlertsConfig)
     engine: EngineConfig = field(default_factory=EngineConfig)
+    dashboard: DashboardConfig = field(default_factory=DashboardConfig)
     source_path: str | None = None
     _thresholds_cache: tuple[tuple[tuple[str, float], ...], list[tuple[int, float]]] | None = field(
         default=None, repr=False, compare=False
@@ -200,6 +218,9 @@ class Config:
         # от режима зависит набор подписок и наличие планировщика стакана
         if self.depth.source != other.depth.source or self.depth.mode != other.depth.mode:
             changed.append("depth.mode")
+        # сервер и база истории создаются один раз при старте; на лету — только episode_gap_s
+        if replace(self.dashboard, episode_gap_s=0.0) != replace(other.dashboard, episode_gap_s=0.0):
+            changed.append("dashboard")
         return changed
 
 
@@ -269,6 +290,7 @@ def config_from_dict(data: dict[str, Any], source_path: str | None = None) -> Co
         ("signals", SignalsConfig),
         ("alerts", AlertsConfig),
         ("engine", EngineConfig),
+        ("dashboard", DashboardConfig),
     ):
         section = data.get(name)
         if isinstance(section, dict):
@@ -320,6 +342,42 @@ class ConfigWatcher:
         cfg.source_path = str(self.path)
         log.info("конфиг перезагружен из %s (mtime=%s, in %s)", self.path, time.ctime(mtime), time.time())
         return cfg
+
+    def mark_seen(self) -> None:
+        """Файл записан нами самими (дашборд) и уже применён — не перечитывать его."""
+        self._mtime = self._read_mtime()
+
+
+def merge_config(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
+    """Наложить частичную правку на конфиг: вложенные секции сливаются, остальное заменяется."""
+    merged = dict(base)
+    for key, value in patch.items():
+        current = merged.get(key)
+        if isinstance(value, dict) and isinstance(current, dict) and key != "windows":
+            merged[key] = merge_config(current, value)
+        else:
+            # windows заменяется целиком: иначе удалённое окно нельзя было бы убрать
+            merged[key] = value
+    return merged
+
+
+def read_config_file(path: str | os.PathLike[str]) -> dict[str, Any]:
+    file_path = Path(path)
+    if not file_path.exists():
+        return {}
+    with file_path.open("r", encoding="utf-8-sig") as fh:
+        data = json.load(fh)
+    if not isinstance(data, dict):
+        raise ValueError(f"конфиг {file_path} должен быть JSON-объектом")
+    return data
+
+
+def write_config_file(path: str | os.PathLike[str], data: dict[str, Any]) -> None:
+    """Атомарная запись (UTF-8 без BOM): сканер читает файл на лету и не должен увидеть половину."""
+    file_path = Path(path)
+    tmp = file_path.with_name(file_path.name + ".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    os.replace(tmp, file_path)
 
 
 def dump_config(cfg: Config) -> str:

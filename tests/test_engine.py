@@ -8,6 +8,7 @@ from test_evaluate import _dumped_state
 
 from scanner.config import Config, config_from_dict
 from scanner.engine import BOOK_GRACE_S, Engine
+from scanner.history import History
 
 
 def _engine(**depth: object) -> Engine:
@@ -92,6 +93,32 @@ def test_rest_source_treats_every_book_as_available(now: float) -> None:
 
     alerts = asyncio.run(engine._evaluate_all(now=now))
     assert [a.inst_id for a in alerts] == [state.inst_id]
+
+
+def test_evaluation_feeds_history(now: float) -> None:
+    """Опубликованный алерт и закрытый эпизод просадки попадают в историю."""
+    engine = _engine(source="rest")
+    engine.history = History(":memory:")
+    state = _dumped_state(now)
+    engine.states[state.inst_id] = state
+
+    asyncio.run(engine._evaluate_all(now=now))
+    assert engine.history.alerts()["total"] == 1
+    assert [ep.inst_id for ep in engine.monitor.active()] == [state.inst_id]
+
+    # цена протухла — просадки больше нет, через episode_gap_s эпизод закрывается
+    asyncio.run(engine._evaluate_all(now=now + engine.cfg.dashboard.episode_gap_s + 1))
+    episodes = engine.history.episodes()["items"]
+    assert len(episodes) == 1 and episodes[0]["alerted"] is True
+    assert engine.monitor.active() == []
+
+
+def test_dashboard_fields_require_restart() -> None:
+    engine = _engine()
+    fresh = config_from_dict({"dashboard": {"port": 9999, "episode_gap_s": 120}})
+    engine._apply_config(fresh)
+    assert engine.cfg.dashboard.port == 8787
+    assert engine.cfg.dashboard.episode_gap_s == 120 and engine.monitor.gap_s == 120
 
 
 def test_guard_waits_for_first_snapshot_of_new_slot(now: float) -> None:

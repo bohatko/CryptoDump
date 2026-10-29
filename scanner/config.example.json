@@ -100,5 +100,14 @@
     "state_save_interval_s": 30.0,
     "state_max_age_s": 900.0,
     "log_level": "INFO"
+  },
+  "dashboard": {
+    "enabled": true,
+    "host": "127.0.0.1",
+    "port": 8787,
+    "token_env": "DASHBOARD_TOKEN",
+    "history_path": "history.sqlite3",
+    "episode_gap_s": 60.0,
+    "log_buffer": 1000
   }
 }

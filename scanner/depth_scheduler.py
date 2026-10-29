@@ -84,6 +84,21 @@ class DepthScheduler:
     def active(self) -> list[str]:
         return list(self._slots)
 
+    def slots(self) -> list[Slot]:
+        return list(self._slots.values())
+
+    def pending(self) -> dict[str, float]:
+        return dict(self._pending)
+
+    async def release(self, inst_id: str) -> bool:
+        """Освободить слот вручную (из дашборда)."""
+        async with self._lock:
+            self._pending.pop(inst_id, None)
+            if inst_id not in self._slots:
+                return False
+            await self._release(inst_id)
+            return True
+
     # ---------- обслуживание ----------
 
     async def run(self) -> None:

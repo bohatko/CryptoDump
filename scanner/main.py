@@ -8,7 +8,7 @@ import logging
 import signal
 import sys
 
-from . import __version__
+from . import __version__, logbuffer
 from .config import Config, dump_config, load_config
 from .engine import Engine, ScanStartupError
 from .env import load_dotenv
@@ -35,6 +35,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--duration", type=float, default=None, help="работать N секунд и выйти")
     parser.add_argument("--dry-run", action="store_true", help="без внешних каналов: только консоль и JSONL")
     parser.add_argument("--no-telegram", action="store_true", help="не отправлять в Telegram")
+    parser.add_argument("--no-dashboard", action="store_true", help="не поднимать веб-дашборд")
+    parser.add_argument("--port", type=int, default=None, help="порт веб-дашборда (по умолчанию 8787)")
     parser.add_argument(
         "--telegram-test",
         action="store_true",
@@ -60,6 +62,10 @@ def _apply_cli_overrides(cfg: Config, args: argparse.Namespace) -> None:
         cfg.market.top_n = max(1, args.top_n)
     if args.log_level:
         cfg.engine.log_level = args.log_level.upper()
+    if args.no_dashboard:
+        cfg.dashboard.enabled = False
+    if args.port:
+        cfg.dashboard.port = args.port
     if args.no_telegram or args.dry_run:
         cfg.alerts.telegram.enabled = False
         cfg.alerts.sinks = [s for s in cfg.alerts.sinks if s != "telegram"]
@@ -83,8 +89,27 @@ async def _amain(args: argparse.Namespace) -> int:
     if args.telegram_test:
         return await _telegram_test(cfg)
 
-    engine = Engine(cfg, dry_run=args.dry_run)
+    # журнал для дашборда подключаем один раз: он должен пережить перезапуск движка
+    logbuffer.install(cfg.dashboard.log_buffer)
 
+    while True:
+        engine = Engine(cfg, dry_run=args.dry_run)
+        _install_signal_handlers(engine)
+        try:
+            await engine.run(duration_s=args.duration)
+        except KeyboardInterrupt:
+            engine.stop()
+            return 0
+        if not engine.restart_requested:
+            return 0
+        # перезапуск из дашборда: перечитываем файл, чтобы применились и поля «только с рестартом»
+        logging.getLogger(__name__).warning("перезапуск сканера")
+        cfg = load_config(args.config)
+        _apply_cli_overrides(cfg, args)
+        logging.getLogger().setLevel(getattr(logging, cfg.engine.log_level.upper(), logging.INFO))
+
+
+def _install_signal_handlers(engine: Engine) -> None:
     loop = asyncio.get_running_loop()
     for name in ("SIGINT", "SIGTERM"):
         sig = getattr(signal, name, None)
@@ -94,12 +119,6 @@ async def _amain(args: argparse.Namespace) -> int:
             loop.add_signal_handler(sig, engine.stop)
         except (NotImplementedError, AttributeError, ValueError):
             pass  # Windows/Proactor: Ctrl+C обработается как KeyboardInterrupt
-
-    try:
-        await engine.run(duration_s=args.duration)
-    except KeyboardInterrupt:
-        engine.stop()
-    return 0
 
 
 async def _telegram_test(cfg: Config) -> int:

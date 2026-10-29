@@ -5,7 +5,7 @@ from __future__ import annotations
 from conftest import make_candles
 
 from scanner.config import Config
-from scanner.evaluate import evaluate_instrument
+from scanner.evaluate import STATUS_ALERT, STATUS_NO_BOOK, STATUS_THIN_BOOK, evaluate_instrument
 from scanner.instrument import InstrumentState
 from scanner.ws_router import WsRouter
 
@@ -63,6 +63,30 @@ def test_no_drop_no_alert(now: float) -> None:
     cfg = Config()
     cfg.windows = {"5m": 10.0}
     assert evaluate_instrument(state, cfg, now=now) is None
+
+
+def _statuses(state: InstrumentState, now: float, **kwargs: object) -> list[tuple[str, str]]:
+    seen: list[tuple[str, str]] = []
+    evaluate_instrument(state, Config(), now=now, observe=lambda _d, s, detail: seen.append((s, detail)), **kwargs)
+    return seen
+
+
+def test_observer_reports_why_drop_did_not_alert(now: float) -> None:
+    assert _statuses(_dumped_state(now), now) == [(STATUS_ALERT, "3/3: bid_wall, cvd_fade, liq_decay")]
+    assert _statuses(_dumped_state(now), now, depth_available=False) == [(STATUS_NO_BOOK, "")]
+
+    thin = [["100.0", "10"] for _ in range(20)]
+    [(status, detail)] = _statuses(_dumped_state(now, bids=thin, asks=thin), now)
+    assert status == STATUS_THIN_BOOK and detail.startswith("0.04M USDT")
+
+
+def test_observer_silent_without_drop(now: float) -> None:
+    state = _dumped_state(now)
+    cfg = Config()
+    cfg.windows = {"5m": 10.0}
+    seen: list[str] = []
+    evaluate_instrument(state, cfg, now=now, observe=lambda _d, s, _x: seen.append(s))
+    assert seen == []
 
 
 def test_stale_price_no_alert(now: float) -> None:
