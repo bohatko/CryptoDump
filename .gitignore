@@ -1,0 +1,22 @@
+# Секреты и локальные артефакты
+.env
+.env.local
+*.env
+
+# Локальный конфиг (шаблон — scanner/config.example.json)
+/config.json
+
+# Результаты работы сканера
+alerts.jsonl
+state.json
+state.json*.tmp
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/

@@ -1,0 +1,17 @@
+# Только настройки инструментов: пакет запускается как `python -m scanner.main`
+# из корня репозитория и не устанавливается через pip.
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = [".", "tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["scanner"]

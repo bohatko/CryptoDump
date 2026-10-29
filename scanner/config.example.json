@@ -1,0 +1,104 @@
+{
+  "market": {
+    "inst_types": [
+      "SWAP",
+      "FUTURES"
+    ],
+    "quote_ccy": "USDT",
+    "symbols": [],
+    "top_n": 0,
+    "exclude_patterns": [
+      "-USDC",
+      "-USD-",
+      "_UMC"
+    ],
+    "ws_url": "wss://ws.okx.com:443/ws/v5/public",
+    "ws_business_url": "wss://ws.okx.com:443/ws/v5/business",
+    "rest_url": "https://www.okx.com",
+    "subscribe_chunk": 64,
+    "ws_channels": [
+      "trades",
+      "candle1m"
+    ],
+    "liquidation_inst_types": [
+      "SWAP"
+    ],
+    "min_turnover_usdt": 100000
+  },
+  "windows": {
+    "1m": 1.5,
+    "5m": 3.0,
+    "30m": 6.0,
+    "1h": 9.0,
+    "2h": 12.0
+  },
+  "depth": {
+    "levels": 20,
+    "min_notional_usdt": 1000000,
+    "poll_interval_s": 5.0,
+    "concurrency": 8,
+    "stale_level_s": 10.0,
+    "stale_after_s": 15.0,
+    "require_fresh_book": true,
+    "require_full_depth": true,
+    "wall_multiplier": 4.0,
+    "wall_min_notional_usdt": 300000,
+    "wall_side": "bid",
+    "wall_exclude_top_level": true,
+    "wall_persist_s": 10.0,
+    "source": "ws",
+    "store_levels": 100,
+    "mode": "ondemand",
+    "book_slots": 20,
+    "book_ttl_s": 180
+  },
+  "cvd": {
+    "window_s": 300,
+    "burst_s": 60,
+    "reversal_ratio": 0.6,
+    "taker_buy_ratio": 1.35,
+    "precise_windows_until_s": 300
+  },
+  "liquidation": {
+    "window_s": 300,
+    "decay_ratio": 0.35,
+    "min_notional_usdt": 200000
+  },
+  "signals": {
+    "min_score": 2
+  },
+  "alerts": {
+    "cooldown_s": 300,
+    "sinks": [
+      "console",
+      "jsonl",
+      "telegram"
+    ],
+    "jsonl_path": "alerts.jsonl",
+    "webhook_url": null,
+    "telegram": {
+      "enabled": true,
+      "token_env": "TELEGRAM_BOT_TOKEN",
+      "chat_id_env": "TELEGRAM_CHAT_ID",
+      "chat_ids": [],
+      "parse_mode": "HTML",
+      "disable_notification": false,
+      "disable_web_page_preview": true,
+      "min_interval_s": 1.0,
+      "timeout_s": 10.0,
+      "retries": 3
+    }
+  },
+  "engine": {
+    "eval_interval_s": 2.0,
+    "reload_interval_s": 15.0,
+    "bootstrap_candles": 125,
+    "trade_stale_after_s": 30.0,
+    "warmup_s": 60.0,
+    "persist_state": true,
+    "state_path": "state.json",
+    "state_save_interval_s": 30.0,
+    "state_max_age_s": 900.0,
+    "log_level": "INFO"
+  }
+}
