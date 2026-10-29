@@ -123,6 +123,8 @@ Dashboard (aiohttp.web, :8787) читает Engine / History / LogBuffer, пиш
 `Engine._check_feed_lag`: предупреждение в плане при ≥ 3 c, лог раз в 5 мин и
 `DepthScheduler.throttle` — лимит слотов × 2/3 (не чаще 30 c, не меньше 2), +1 раз в 120 c
 при задержке < 1 c. Лимит сейчас — `DepthScheduler.limit()`, а не `book_slots` напрямую.
+При ≥ 20 c очередь уже в канале и сама не рассосётся (наблюдали рост до 69 c после урезания)
+→ `stream.request_reconnect()` у потока с `trades`, не чаще раза в 2 мин.
 
 ## Дашборд — что легко сломать
 

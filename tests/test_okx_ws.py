@@ -134,6 +134,20 @@ def test_silent_mass_channel_triggers_reconnect() -> None:
     assert stream._silent_channel(NOW + 95) == "trades"
 
 
+def test_requested_reconnect_closes_connection() -> None:
+    stream, ws = _stream()
+    closed: list[bool] = []
+
+    async def close() -> None:
+        closed.append(True)
+        ws.closed = True
+
+    ws.close = close  # type: ignore[attr-defined]
+    stream.request_reconnect("тест")
+    asyncio.run(stream._flush_loop(ws, asyncio.Event()))  # type: ignore[arg-type]
+    assert closed == [True] and stream.forced_reconnects == 1
+
+
 def test_endpoint_split() -> None:
     """candle1m должен уходить на business-эндпоинт, trades — на public."""
     subs = per_instrument(["BTC-USDT-SWAP", "ETH-USDT-SWAP"], ("trades", "candle1m"))

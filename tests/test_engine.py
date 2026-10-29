@@ -10,6 +10,7 @@ from scanner.config import Config, config_from_dict
 from scanner.engine import BOOK_GRACE_S, Engine
 from scanner.history import History
 from scanner.models import TradePlan
+from scanner.okx_ws import Subscription
 
 
 def _engine(**depth: object) -> Engine:
@@ -110,10 +111,35 @@ def test_late_feed_warns_in_trade_plan(now: float) -> None:
     engine._check_feed_lag([alert], now=now)
     assert alert.plan.warnings == [] and engine.feed_lag_s is None  # сделок ещё не было
 
-    engine.router.trade_lag.add(20.0, now=now)
+    engine.router.trade_lag.add(5.0, now=now)
     engine._check_feed_lag([alert], now=now)
-    assert engine.feed_lag_s == 20.0
-    assert any("опаздывают на 20 c" in w for w in alert.plan.warnings)
+    assert engine.feed_lag_s == 5.0
+    assert any("опаздывают на 5 c" in w for w in alert.plan.warnings)
+
+
+def test_huge_feed_lag_reconnects_trade_stream(now: float) -> None:
+    """Очередь в канале на десятки секунд сама не рассосётся — новое соединение начинает с живых данных."""
+
+    class FakeStream:
+        def __init__(self, channel: str) -> None:
+            self.subscriptions = [Subscription(channel=channel, inst_id="X-USDT-SWAP")]
+            self.reasons: list[str] = []
+
+        def request_reconnect(self, reason: str) -> None:
+            self.reasons.append(reason)
+
+    engine = _engine()
+    trades, candles = FakeStream("trades"), FakeStream("candle1m")
+    engine._streams = [trades, candles]  # type: ignore[list-item]
+
+    engine.router.trade_lag.add(30.0, now=now)
+    engine._check_feed_lag([], now=now)
+    assert len(trades.reasons) == 1 and candles.reasons == []
+    assert engine.router.trade_lag.value(now=now) is None  # опоздавшие замеры не тянут медиану дальше
+
+    engine.router.trade_lag.add(30.0, now=now + 10)
+    engine._check_feed_lag([], now=now + 10)
+    assert len(trades.reasons) == 1  # не чаще раза в 2 минуты
 
 
 def test_evaluation_feeds_history(now: float) -> None:

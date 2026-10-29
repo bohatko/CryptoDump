@@ -156,6 +156,7 @@ class OkxPublicStream:
         self.reconnects = 0
         self.rejected = 0  # сколько запросов OKX отклонил по лимиту (60014)
         self.silent_reconnects = 0
+        self.forced_reconnects = 0
         self._reset_connection_state()
 
     def _reset_connection_state(self, now: float = 0.0) -> None:
@@ -169,6 +170,7 @@ class OkxPublicStream:
         self._paused_until = 0.0
         self._pause_s = 0.0
         self._budget_warned = False
+        self._reconnect_reason: str | None = None
         self._channel_seen: dict[str, float] = {}
         self._session_started = now
 
@@ -295,6 +297,10 @@ class OkxPublicStream:
     async def _flush_loop(self, ws: aiohttp.ClientWebSocketResponse, stop: asyncio.Event) -> None:
         while not stop.is_set() and not ws.closed:
             now = time.time()
+            if self._reconnect_reason is not None:
+                log.warning("%s: пересоздаю соединение — %s", _endpoint(self.url), self._reconnect_reason)
+                await ws.close()
+                return
             if self._silent_channel(now):
                 await ws.close()
                 return
@@ -405,6 +411,12 @@ class OkxPublicStream:
                     # отписка была первой половиной ресинка
                     self._resync.add(item.key)
 
+    def request_reconnect(self, reason: str) -> None:
+        """Пересоздать соединение на ближайшем тике ``flush``: подписки восстановятся сами."""
+        if self._is_open():
+            self.forced_reconnects += 1
+            self._reconnect_reason = reason
+
     def _silent_channel(self, now: float) -> str | None:
         """Массовый канал молчит дольше ``SILENT_CHANNEL_S`` — биржа перестала слать данные."""
         if not self._session_started or now - self._session_started < SILENT_CHANNEL_S:
@@ -442,6 +454,7 @@ class OkxPublicStream:
             "rejected": self.rejected,
             "pausedS": max(0.0, self._paused_until - now),
             "silentReconnects": self.silent_reconnects,
+            "forcedReconnects": self.forced_reconnects,
         }
 
     # ---------- сообщения ----------

@@ -40,6 +40,9 @@ class LagMeter:
     def add(self, lag_s: float, *, now: float) -> None:
         self._samples.append((now, max(0.0, lag_s)))
 
+    def reset(self) -> None:
+        self._samples.clear()
+
     def value(self, *, now: float) -> float | None:
         while self._samples and now - self._samples[0][0] > self.window_s:
             self._samples.popleft()

@@ -54,6 +54,9 @@ BOOK_GRACE_S = 5.0
 # OKX отдаёт сделку за ~0.1 c; с опозданием в секунды вход по цене алерта уже не тот
 FEED_LAG_WARN_S = 3.0
 FEED_LAG_LOG_EVERY_S = 300.0
+# с такой очередью в канале ждать её рассасывания дольше, чем переподключиться
+FEED_LAG_RECONNECT_S = 20.0
+FEED_LAG_RECONNECT_EVERY_S = 120.0
 
 
 class ScanStartupError(RuntimeError):
@@ -88,6 +91,7 @@ class Engine:
         self.last_eval_ms = 0.0
         self.feed_lag_s: float | None = None
         self._lag_warned_at = 0.0
+        self._lag_reconnect_at = 0.0
         # main.py пересоздаёт движок, если остановка запрошена как перезапуск (дашборд)
         self.restart_requested = False
 
@@ -432,6 +436,14 @@ class Engine:
             self.depth_scheduler.throttle(lag, now=now)
         if lag is None or lag < FEED_LAG_WARN_S:
             return
+        if lag >= FEED_LAG_RECONNECT_S and now - self._lag_reconnect_at >= FEED_LAG_RECONNECT_EVERY_S:
+            # Очередь уже в канале: урезанные стаканы её не отменяют, OKX дошлёт всё
+            # опоздавшее. Новое соединение начинает с текущих данных.
+            self._lag_reconnect_at = now
+            for stream in self._streams:
+                if any(sub.channel == "trades" for sub in stream.subscriptions):
+                    stream.request_reconnect(f"сделки опаздывают на {lag:.0f} c, сбрасываю очередь")
+            self.router.trade_lag.reset()
         for alert in alerts:
             if alert.plan is not None:
                 alert.plan.warnings.append(f"данные биржи опаздывают на {lag:.0f} c — сверьте цену перед входом")
