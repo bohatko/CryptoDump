@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Sequence
+from typing import Any
 
 from .config import WINDOW_LABELS
 
@@ -180,6 +180,56 @@ class Signals:
 
 
 @dataclass(slots=True)
+class TradePlan:
+    """Что делать по алерту: лонг на откуп, вход, стоп, цели.
+
+    Механический расчёт по уровням дампа (дно, максимум окна, стена покупателя),
+    а не прогноз: решение и размер позиции остаются за человеком.
+    """
+
+    entry: float
+    entry_max: float  # выше — не догонять
+    stop: float
+    stop_basis: str  # под чем стоит стоп: «стеной 0.136» / «дном дампа 0.1340»
+    targets: list[float]
+    rr: list[float]  # прибыль/риск до каждой цели
+    low: float  # дно дампа
+    valid_until: float
+    qty: float | None = None  # в монетах, если задан риск в USDT
+    contracts: float | None = None
+    notional: float | None = None
+    risk_usdt: float | None = None
+    warnings: list[str] = field(default_factory=list)
+
+    @property
+    def stop_pct(self) -> float:
+        return (self.stop / self.entry - 1.0) * 100.0
+
+    def target_pcts(self) -> list[float]:
+        return [(t / self.entry - 1.0) * 100.0 for t in self.targets]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "side": "long",
+            "entry": self.entry,
+            "entryMax": self.entry_max,
+            "stop": self.stop,
+            "stopPct": _round(self.stop_pct, 3),
+            "stopBasis": self.stop_basis,
+            "targets": list(self.targets),
+            "targetPcts": [_round(p, 3) for p in self.target_pcts()],
+            "rr": [_round(r, 2) for r in self.rr],
+            "low": self.low,
+            "validUntil": self.valid_until,
+            "qty": self.qty,
+            "contracts": self.contracts,
+            "notional": _round(self.notional, 2) if self.notional is not None else None,
+            "riskUsdt": self.risk_usdt,
+            "warnings": list(self.warnings),
+        }
+
+
+@dataclass(slots=True)
 class Alert:
     """Готовый алерт. ``to_dict()`` — то, что уходит в JSONL и вебхук."""
 
@@ -197,6 +247,11 @@ class Alert:
     signals: Signals
     # остальные окна, которые сработали в этом же дампе (гасятся кулдауном)
     sibling_windows: list[str] = field(default_factory=list)
+    plan: TradePlan | None = None
+
+    @property
+    def base(self) -> str:
+        return self.inst_id.split("-")[0]
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -246,29 +301,67 @@ class Alert:
                 "hits": list(self.signals.hits),
             },
             "siblingWindows": list(self.sibling_windows),
+            "plan": self.plan.to_dict() if self.plan is not None else None,
         }
 
     def console_text(self) -> str:
-        from datetime import datetime, timezone
+        from datetime import datetime
 
-        stamp = datetime.fromtimestamp(self.ts, tz=timezone.utc).strftime("%H:%M:%S")
-        wall = self.book.wall
-        wall_txt = (
-            f"стена bid {_fmt_px(wall.px)} × {_fmt_money(wall.notional)} ({self.book.wall_ratio:.1f}× среднего)"
-            if wall
-            else "стены нет"
-        )
-        lines: Sequence[str] = (
-            f"[{stamp}] ДАМП {self.inst_id}  окно {self.window_label}  {self.drop_pct:.2f}%  px {_fmt_px(self.price)}",
-            f"  стакан: bid {_fmt_money(self.book.bid_notional)} / ask {_fmt_money(self.book.ask_notional)}"
-            f"  imb {_fmt_ratio(self.book.imbalance)}  {wall_txt}",
-            f"  CVD {self.cvd.window_s}s: {_fmt_money(self.cvd.cvd)}  taker {_fmt_ratio(self.cvd.taker_ratio)}"
-            f"  ({'покупка' if self.cvd.burst_buy_notional > self.cvd.burst_sell_notional else 'продажа'})",
-            f"  ликвидации {self.liq.window_s}s: {_fmt_money(self.liq.earlier_notional)} →"
-            f" {_fmt_money(self.liq.recent_notional)}  затухание {_fmt_ratio(self.liq.decay_ratio)}",
-            f"  score {self.signals.score}/3: {', '.join(self.signals.hits) or '—'}",
+        stamp = datetime.fromtimestamp(self.ts).strftime("%H:%M:%S")
+        lines: list[str] = [
+            f"[{stamp}] ПОКУПКА {self.base} ({self.inst_id}) — откуп после дампа {self.drop_pct:.2f}%"
+            f" за {self.window_label}",
+        ]
+        plan = self.plan
+        if plan is not None:
+            targets = " · ".join(f"{_fmt_px(t)} ({p:+.1f}%)" for t, p in zip(plan.targets, plan.target_pcts()))
+            lines += [
+                f"  вход {_fmt_px(plan.entry)} по рынку, не выше {_fmt_px(plan.entry_max)}",
+                f"  стоп {_fmt_px(plan.stop)} ({plan.stop_pct:.1f}%) — под {plan.stop_basis}",
+                f"  цели {targets}",
+                f"  прибыль/риск {' · '.join(f'{r:.1f}' for r in plan.rr)}"
+                f"  до {datetime.fromtimestamp(plan.valid_until).strftime('%H:%M')}",
+            ]
+            if plan.qty is not None:
+                lines.append(
+                    f"  размер {_fmt_qty(plan.qty)} {self.base} ≈ {_fmt_money(plan.notional or 0.0)} USDT"
+                    f" ({_fmt_qty(plan.contracts or 0.0)} контр.) при риске {plan.risk_usdt:g} USDT"
+                )
+            lines += [f"  ⚠ {w}" for w in plan.warnings]
+        else:
+            lines.append(f"  цена {_fmt_px(self.price)}, максимум окна {_fmt_px(self.high)}")
+        lines.append(f"  сигналов {self.signals.score}/3: {', '.join(self.signals.hits) or '—'}")
+        lines += [f"  · {reason}" for reason in self.reasons()]
+        lines.append(
+            f"  стакан {self.book.levels} ур.: покупатели {_fmt_money(self.book.bid_notional)}"
+            f" / продавцы {_fmt_money(self.book.ask_notional)}"
         )
         return "\n".join(lines)
+
+    def reasons(self) -> list[str]:
+        """Почему это откуп, человеческими словами — по сработавшим сигнатурам."""
+        out: list[str] = []
+        wall = self.book.wall
+        if self.signals.bid_wall and wall is not None:
+            out.append(
+                f"стена покупателя {_fmt_px(wall.px)} на {_fmt_money(wall.notional)} USDT"
+                f" ({self.book.wall_ratio:.1f}× обычного уровня) держится и не снимается"
+            )
+        if self.signals.cvd_fade:
+            buy, sell = self.cvd.burst_buy_notional, self.cvd.burst_sell_notional
+            if sell > 0 and buy > sell:
+                out.append(
+                    f"покупатели перехватили инициативу: за минуту купили {_fmt_money(buy)}"
+                    f" против {_fmt_money(sell)} продаж ({buy / sell:.1f}×)"
+                )
+            else:
+                out.append("продавец выдыхается: в конце окна покупки отыграли большую часть продаж")
+        if self.signals.liq_decay:
+            out.append(
+                f"каскад ликвидаций затух: {_fmt_money(self.liq.earlier_notional)} →"
+                f" {_fmt_money(self.liq.recent_notional)} USDT"
+            )
+        return out
 
 
 def _round(value: float, digits: int) -> float | None:
@@ -294,6 +387,14 @@ def _fmt_px(px: float) -> str:
     if px >= 1:
         return f"{px:.4f}".rstrip("0").rstrip(".")
     return f"{px:.8f}".rstrip("0").rstrip(".")
+
+
+def _fmt_qty(value: float) -> str:
+    if value >= 100:
+        return f"{value:,.0f}".replace(",", " ")
+    if value >= 1:
+        return f"{value:.2f}".rstrip("0").rstrip(".")
+    return f"{value:.6f}".rstrip("0").rstrip(".")
 
 
 def _fmt_money(usdt: float) -> str:

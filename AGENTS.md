@@ -60,16 +60,17 @@ Dashboard (aiohttp.web, :8787) читает Engine / History / LogBuffer, пиш
 | `instrument.py` | `InstrumentState` — всё состояние одного инструмента: `book`, `candles`, `trades`, `drops`, `liq`, `last_trade`, `turnover`, `price()` |
 | `universe.py` | `build_universe` → `[(Instrument, оборот_24ч)]` (фильтр quote / `exclude_patterns` / `min_turnover_usdt` / `top_n`), `bootstrap_candles` |
 | `ws_router.py` | `WsRouter`: таблица «канал → обработчик» (`trades`, `candle1m`, `books`, `books5`, `liquidation-orders`); разрыв `seqId` → колбэк `on_book_gap` |
-| `depth_scheduler.py` | `DepthScheduler` (режим `ondemand`): слоты `books` под дампы, TTL `book_ttl_s`, вытеснение самой слабой просадки |
-| `depth_guard.py` | `DepthGuard`: переподписка `books` при разрыве цепочки или протухании (кулдаун 5 c); REST-поллинг только при `depth.source == "rest"` |
-| `evaluate.py` | `evaluate_instrument()` — чистая функция: просадка → фильтр ликвидности → сигнатуры → `Alert` / `DropSeen` / `None` |
+| `depth_scheduler.py` | `DepthScheduler` (режим `ondemand`): слоты `books` под дампы, TTL `book_ttl_s`, вытеснение самой слабой просадки не раньше `book_min_hold_s`, пауза `book_retry_s` для отпущенных (`cooling()`) |
+| `depth_guard.py` | `DepthGuard`: переподписка `books` при разрыве цепочки или протухании (backoff 5 → 120 c на инструмент, сброс после 60 c здоровья); REST-поллинг только при `depth.source == "rest"` |
+| `evaluate.py` | `evaluate_instrument()` — чистая функция: просадка → фильтр ликвидности → сигнатуры → `Alert` (с `plan`) / `DropSeen` / `None` |
+| `plan.py` | `build_plan()` — чистая функция: план лонга по алерту (вход = ask, стоп под стеной/дном, цели по откату дампа, R:R, размер от `trade.risk_usdt`, округление до `tickSz`) |
 | `detection.py` | три сигнатуры (`bid_wall`, `cvd_fade`, `liq_decay`), `passed_liquidity`, `score_ok` |
 | `orderbook.py` | `OrderBook`: REST-снимок, WS snapshot + инкременты по `seqId`, `summary()`, поиск и подтверждение стены |
 | `windows.py` | `TradeWindow` (секундные бакеты: CVD, точный high), `CandleBook`, `DropWindows`, `LiquidationTracker` |
-| `okx_ws.py` | `OkxPublicStream`: подписки чанками, ping, реконнект с backoff, `subscribe` / `unsubscribe` / `resubscribe` на лету; `split_by_endpoint` |
+| `okx_ws.py` | `OkxPublicStream`: желаемые подписки vs отправленные на соединении, `flush` раз в 0.4 c в бюджете 400/ч, пауза и повтор на `60014`, сторож молчащего канала, ping, реконнект с backoff; `budget()`; `split_by_endpoint` |
 | `market.py` | REST-клиент OKX (instruments, tickers, books, candles), ретраи 429/5xx |
 | `parsers.py` | сырые ответы OKX → модели, перевод контрактов в монеты (`ctVal`) |
-| `models.py` | датаклассы `Instrument`, `Trade`, `Candle`, `Level`, `BookSummary`, `DropHit`, `Signals`, `Alert` (+ текст и `to_dict`) |
+| `models.py` | датаклассы `Instrument`, `Trade`, `Candle`, `Level`, `BookSummary`, `DropHit`, `Signals`, `TradePlan`, `Alert` (+ текст, `reasons()` и `to_dict`) |
 | `config.py` | датаклассы конфига и дефолты, загрузка JSON, `ConfigWatcher`, `restart_required_changes` |
 | `alerts.py` / `telegram.py` | `AlertRouter` + `Cooldown`, синки; Telegram Bot API (HTML, нарезка, 429/5xx, лимитер) |
 | `state.py` | `state.json`: бакеты трейдов, ликвидации, кулдаун (атомарная запись, TTL 15 мин) |
@@ -103,6 +104,18 @@ Dashboard (aiohttp.web, :8787) читает Engine / History / LogBuffer, пиш
 `DepthGuard` чинит только стаканы, которыми кто-то владеет (`Engine._guard_owns`):
 статические из `top` и слоты планировщика старше `BOOK_GRACE_S` (5 c, ждём первый snapshot).
 Иначе сторож вернул бы `books` инструменту без слота в обход планировщика.
+
+**Бюджет подписок OKX: 480 запросов `subscribe`/`unsubscribe` в час на соединение.**
+Сверх — `60014 Requests too frequent`, а после затяжного шторма OKX молча перестаёт слать
+данные (соединение живо, сделок нет — сканер слепнет). Ресинк стакана = 2 запроса
+(повторный `subscribe` snapshot не даёт). Поэтому:
+
+- `OkxPublicStream.subscribe/unsubscribe/resubscribe` ничего не шлют, а меняют желаемое
+  состояние; отправляет только `flush` (раз в 0.4 c, один запрос-пачка, ≤ 400/ч). Не
+  добавляйте прямых `send_json` с `op` подписки в обход `_send`.
+- `DepthGuard` — экспоненциальный backoff на инструмент; `DepthScheduler` — `book_min_hold_s`
+  и `book_retry_s`. Любой новый источник переподписок должен иметь свой предел частоты.
+- Расход виден в `/api/status` → `streams[].budget` и в шапке дашборда.
 
 ## Дашборд — что легко сломать
 
@@ -151,6 +164,11 @@ Dashboard (aiohttp.web, :8787) читает Engine / History / LogBuffer, пиш
    после реконнекта `books` вернётся инструменту без слота.
 9. **Секреты только из окружения/`.env`.** В конфиге — имена переменных (`token_env`,
    `chat_id_env`). Токен не логировать.
+10. **Запросы подписки — только через `flush` и в бюджете** (см. выше). Шторм переподписок
+    уже однажды ослепил сканер на всём рынке.
+11. **План сделки — только лонг, уровни из дампа** (`plan.py`): стоп ниже входа, цели выше
+    входа, иначе `build_plan` возвращает `None` и алерт уходит без плана. Цены — вниз до
+    `tickSz`, размер в контрактах = монеты / `ctVal`.
 
 ## Как вносить изменения
 

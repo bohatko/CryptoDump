@@ -36,11 +36,11 @@ from .alerts import AlertRouter
 from .config import Config, ConfigWatcher
 from .depth_guard import DepthGuard
 from .depth_scheduler import DepthScheduler
-from .evaluate import DropSeen, evaluate_instrument
+from .evaluate import STATUS_LOW_SCORE, DropSeen, evaluate_instrument
 from .history import History
 from .instrument import InstrumentState
 from .market import OkxRest
-from .models import Alert
+from .models import Alert, DropHit
 from .monitor import DropMonitor
 from .okx_ws import OkxPublicStream, Subscription, liquidations, per_instrument, split_by_endpoint
 from .state import load_state, save_state
@@ -247,6 +247,7 @@ class Engine:
                 inst_id=inst.inst_id,
                 inst_type=inst.inst_type,
                 ct_val=inst.contract_value,
+                tick_sz=inst.tick_sz,
                 turnover=turnover,
                 max_window_s=self.cfg.max_window_s(),
                 cvd_window_s=self.cfg.cvd.window_s,
@@ -387,7 +388,7 @@ class Engine:
                     self.cfg,
                     now=now,
                     depth_available=self._has_book(state.inst_id),
-                    observe=lambda drop, status, detail, iid=state.inst_id: self.monitor.observe(
+                    observe=lambda drop, status, detail, iid=state.inst_id: self._observe(
                         iid, drop, status, detail, now=now
                     ),
                 )
@@ -417,6 +418,14 @@ class Engine:
         if alerts:
             await asyncio.gather(*(self._publish(alert) for alert in alerts), return_exceptions=True)
         return alerts
+
+    def _observe(self, inst_id: str, drop: DropHit, status: str, detail: str, *, now: float) -> None:
+        self.monitor.observe(inst_id, drop, status, detail, now=now)
+        scheduler = self.depth_scheduler
+        if status == STATUS_LOW_SCORE and scheduler is not None and scheduler.has_book(inst_id):
+            # стакан живой и ликвидный, дамп продолжается, ждём сигнатур — слот продлеваем.
+            # Тонкий стакан не продлеваем: слот истечёт по TTL и достанется другому.
+            scheduler.want(inst_id, drop_pct=drop.drop_pct, now=now)
 
     async def _publish(self, alert: Alert) -> None:
         published = await self.alerts.publish(alert)

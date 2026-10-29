@@ -106,11 +106,39 @@ def test_deeper_drop_evicts_weaker_slot(now: float) -> None:
 
     sched.want("A-USDT-SWAP", drop_pct=-3.0, now=now)
     asyncio.run(sched.tick(now=now))
+    # свежий слот не отбираем: иначе две просадки перекидывали бы его каждую секунду
     sched.want("B-USDT-SWAP", drop_pct=-8.0, now=now + 1)
     asyncio.run(sched.tick(now=now + 1))
+    assert sched.active() == ["A-USDT-SWAP"]
 
+    hold = sched.cfg.depth.book_min_hold_s
+    sched.want("B-USDT-SWAP", drop_pct=-8.0, now=now + hold)
+    asyncio.run(sched.tick(now=now + hold))
     assert sched.active() == ["B-USDT-SWAP"]
     assert stream.unsubscribed == ["A-USDT-SWAP"]
+
+
+def test_released_instrument_waits_before_new_slot(now: float) -> None:
+    """Вытесненный A не возвращается сразу (пинг-понг слотов), если просадка не углубилась."""
+    states = {iid: make_state(iid, drop_pct=-3.0, now=now) for iid in ("A-USDT-SWAP", "B-USDT-SWAP")}
+    sched, stream = _scheduler(states, slots=2, ttl=60.0)
+    sched.want("A-USDT-SWAP", drop_pct=-3.0, now=now)
+    asyncio.run(sched.tick(now=now))
+    asyncio.run(sched.tick(now=now + 100))  # TTL истёк — слот освобождён
+    assert sched.active() == []
+
+    sched.want("A-USDT-SWAP", drop_pct=-3.2, now=now + 101)
+    asyncio.run(sched.tick(now=now + 101))
+    assert sched.active() == [] and sched.pending() == {}  # пауза book_retry_s
+    assert stream.subscribed == ["A-USDT-SWAP"]
+
+    sched.want("A-USDT-SWAP", drop_pct=-5.0, now=now + 102)  # просадка в 1.5+ раза глубже
+    asyncio.run(sched.tick(now=now + 102))
+    assert sched.active() == ["A-USDT-SWAP"]
+
+    sched.want("B-USDT-SWAP", drop_pct=-3.0, now=now + 102)
+    asyncio.run(sched.tick(now=now + 102))
+    assert "B-USDT-SWAP" in sched.active()  # у B паузы не было
 
 
 def test_failed_subscribe_keeps_pending(now: float) -> None:

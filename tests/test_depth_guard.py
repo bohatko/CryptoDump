@@ -55,8 +55,9 @@ def test_resync_resubscribes_books_on_gap(now: float) -> None:
 
 
 def test_resync_cooldown_prevents_storm(now: float) -> None:
+    """Пауза между ресинками одного стакана растёт вдвое: 5 → 10 → 20 c (лимит OKX 480/ч)."""
     guard, state, stream = _guard(now)
-    cooldown = max(5.0, guard.cfg.depth.poll_interval_s)
+    base = max(5.0, guard.cfg.depth.poll_interval_s)
 
     guard.schedule_resync(state)
     asyncio.run(guard.resync_ws_books(now=now))
@@ -64,8 +65,25 @@ def test_resync_cooldown_prevents_storm(now: float) -> None:
     asyncio.run(guard.resync_ws_books(now=now + 1))
     assert len(stream.resubscribed) == 1
 
-    asyncio.run(guard.resync_ws_books(now=now + cooldown + 0.1))
+    asyncio.run(guard.resync_ws_books(now=now + base + 0.1))
+    assert len(stream.resubscribed) == 1  # вторая попытка ждёт уже 2 × base
+    asyncio.run(guard.resync_ws_books(now=now + 2 * base + 0.1))
     assert len(stream.resubscribed) == 2
+    asyncio.run(guard.resync_ws_books(now=now + 2 * base + 3 * base))
+    assert len(stream.resubscribed) == 2  # третья — через 4 × base после второй
+    assert guard.cooldown(state.inst_id) == 4 * base
+
+
+def test_backoff_resets_after_book_recovers(now: float) -> None:
+    guard, state, stream = _guard(now)
+    guard.schedule_resync(state)
+    asyncio.run(guard.resync_ws_books(now=now))
+    assert guard.cooldown(state.inst_id) > max(5.0, guard.cfg.depth.poll_interval_s)
+
+    later = now + 120
+    _fresh_ws_book(state, later)  # пришёл свежий снимок, стакан минуту исправен
+    asyncio.run(guard.resync_ws_books(now=later))
+    assert guard.cooldown(state.inst_id) == max(5.0, guard.cfg.depth.poll_interval_s)
 
 
 def test_stale_book_triggers_resync(now: float) -> None:

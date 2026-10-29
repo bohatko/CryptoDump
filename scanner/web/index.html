@@ -262,6 +262,7 @@ const fmtPx = (v) => {
   return String(+v.toPrecision(5));
 };
 const fmtRatio = (v) => v == null ? "∞" : v.toFixed(2);
+const fmtNum = (v) => v == null ? "—" : v >= 100 ? Math.round(v).toLocaleString("ru-RU") : v >= 1 ? +v.toFixed(2) + "" : +v.toFixed(6) + "";
 const fmtDur = (s) => {
   if (s == null) return "—";
   if (s < 60) return Math.round(s) + " с";
@@ -284,7 +285,13 @@ function renderHeader() {
   const wsDown = s.streams.some((x) => !x.connected) && s.phase === "работает";
   ph.textContent = wsDown ? "нет WS" : s.phase;
   ph.className = "pill " + (wsDown ? "bad" : s.phase === "работает" ? "ok" : s.phase === "прогрев" ? "warn" : "info");
-  const ws = s.streams.map((x) => `${x.endpoint} ${x.connected ? "✓" : "✗"}${x.reconnects ? " ↻" + x.reconnects : ""}`).join(" · ") || "—";
+  const budget = (b) => {
+    if (!b) return "";
+    const hot = b.opsHour >= b.opsLimit * 0.8 || b.pausedS > 0;
+    const tip = `запросов подписки за час: ${b.opsHour} из ${b.opsLimit}; ждут отправки: ${b.waiting}; отказов 60014: ${b.rejected}`;
+    return ` <span class="${hot ? "neg" : "muted"}" title="${tip}">${b.opsHour}/${b.opsLimit}${b.waiting ? " ⏳" + b.waiting : ""}</span>`;
+  };
+  const ws = s.streams.map((x) => `${x.endpoint} ${x.connected ? "✓" : "✗"}${x.reconnects ? " ↻" + x.reconnects : ""}${budget(x.budget)}`).join(" · ") || "—";
   const metrics = [
     ["аптайм", fmtDur(s.uptimeS)],
     ["инструментов", s.instruments],
@@ -384,10 +391,21 @@ function hbars(obj, colors = {}, labels = {}) {
 }
 
 function alertsTable(items, empty) {
-  return table(["Время", "Инструмент", "Окно", "#Просадка", "#Цена", "#Score", "Сигнатуры", "#Глубина"],
-    items.map((a) => `<tr class="click" data-alert="${a.id}"><td>${fmtTime(a.ts)}</td><td>${esc(a.instId)}</td><td>${esc(a.window)}</td>
-      <td class="num neg">${fmtPct(a.dropPct)}</td><td class="num">${fmtPx(a.price)}</td><td class="num">${a.score}/3</td>
-      <td>${a.hits.map((h) => `<span class="tag">${esc(h)}</span>`).join("")}</td><td class="num">${fmtMoney(a.totalNotional)}</td></tr>`), empty);
+  const tp = (p) => {
+    if (!p || !p.targets?.length) return "—";
+    const i = Math.min(1, p.targets.length - 1);
+    return `${fmtPx(p.targets[i])} <span class="pos">${fmtPct(p.targetPcts?.[i])}</span>`;
+  };
+  return table(["Время", "Инструмент", "Окно", "#Просадка", "#Вход", "#Стоп", "#Цель 2", "#Прибыль/риск", "#Score", "Сигнатуры"],
+    items.map((a) => {
+      const p = a.plan;
+      return `<tr class="click" data-alert="${a.id}"><td>${fmtTime(a.ts)}</td><td>${esc(a.instId)}</td><td>${esc(a.window)}</td>
+      <td class="num neg">${fmtPct(a.dropPct)}</td><td class="num">${fmtPx(p ? p.entry : a.price)}</td>
+      <td class="num">${p ? `${fmtPx(p.stop)} <span class="neg">${fmtPct(p.stopPct)}</span>` : "—"}</td>
+      <td class="num">${tp(p)}</td><td class="num">${p?.rr?.length ? p.rr.map((r) => fmtRatio(r)).join(" · ") : "—"}${p?.warnings?.length ? ` <span title="${esc(p.warnings.join("; "))}">⚠️</span>` : ""}</td>
+      <td class="num">${a.score}/3</td>
+      <td>${a.hits.map((h) => `<span class="tag">${esc(h)}</span>`).join("")}</td></tr>`;
+    }), empty);
 }
 
 // ---------- алерты ----------
@@ -410,6 +428,7 @@ async function openAlert(id) {
   $("#modalBody").innerHTML = `
     <h2>${esc(a.instId)} <span class="tag">${esc(a.window)}</span> <span class="neg">${fmtPct(a.dropPct)}</span><span class="spacer"></span><button onclick="closeModal()">Закрыть</button></h2>
     <div class="muted" style="margin-bottom:12px">${fmtTime(a.ts)} · цена ${fmtPx(a.price)} · максимум окна ${fmtPx(a.windowHigh)}${a.siblingWindows?.length ? " · также сработали: " + esc(a.siblingWindows.join(", ")) : ""}</div>
+    ${planCard(a)}
     <div class="grid g3">
       <div class="card"><h3>Стакан</h3><div class="kv">
         <span>bid</span><span>${fmtMoney(b.bidNotional)}</span><span>ask</span><span>${fmtMoney(b.askNotional)}</span>
@@ -427,6 +446,24 @@ async function openAlert(id) {
       <span class="spacer"></span> <a href="#" data-inst="${esc(a.instId)}">открыть инструмент →</a></div>
     <details><summary class="muted">Сырые данные</summary><pre>${esc(JSON.stringify(a, null, 2))}</pre></details>`;
   $("#modal").classList.add("open");
+}
+function planCard(a) {
+  const p = a.plan;
+  if (!p) return `<div class="card" style="margin-bottom:12px"><h3>План сделки</h3><div class="muted">У этого алерта плана нет (записан до появления расчёта или цены уже выше целей).</div></div>`;
+  const base = esc(String(a.instId).split("-")[0]);
+  const until = new Date(p.validUntil * 1000).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+  const targets = p.targets.map((t, i) => `<b>${fmtPx(t)}</b> <span class="pos">${fmtPct(p.targetPcts[i])}</span>`).join(" · ");
+  const size = p.qty != null
+    ? `<span>размер</span><span>${fmtNum(p.qty)} ${base} ≈ ${fmtMoney(p.notional)} USDT (${fmtNum(p.contracts)} контр.), на стопе −${p.riskUsdt} USDT</span>`
+    : `<span>размер</span><span class="muted">задайте «Риск на сделку» в настройках — посчитаю количество</span>`;
+  return `<div class="card" style="margin-bottom:12px;border-color:var(--green)"><h3>🟢 Покупка ${base} — лонг на откуп</h3><div class="kv">
+    <span>вход</span><span><b>${fmtPx(p.entry)}</b> по рынку, не выше ${fmtPx(p.entryMax)}</span>
+    <span>стоп</span><span><b>${fmtPx(p.stop)}</b> <span class="neg">${fmtPct(p.stopPct)}</span> — под ${esc(p.stopBasis)}</span>
+    <span>цели</span><span>${targets}</span>
+    <span>прибыль/риск</span><span>${p.rr.map((r) => fmtRatio(r)).join(" · ")}</span>
+    ${size}
+    <span>актуально</span><span>до ${until}; дно дампа ${fmtPx(p.low)}</span></div>
+    ${(p.warnings || []).map((w) => `<div class="neg" style="margin-top:6px">⚠️ ${esc(w)}</div>`).join("")}</div>`;
 }
 function closeModal() { $("#modal").classList.remove("open"); }
 
@@ -546,7 +583,18 @@ const FIELDS = [
     ["depth", "wall_persist_s", "Стена должна простоять, с"],
     ["depth", "book_slots", "Слотов стакана"],
     ["depth", "book_ttl_s", "Слот живёт после дампа, с"],
+    ["depth", "book_min_hold_s", "Слот не отбирается раньше, с"],
+    ["depth", "book_retry_s", "Повторно стакан тому же инструменту через, с"],
     ["depth", "mode", "Режим стакана", ["ondemand", "top", "all"]],
+  ]],
+  ["План сделки", [
+    ["trade", "risk_usdt", "Риск на сделку, USDT (0 = размер не считать)"],
+    ["trade", "entry_slippage_pct", "Не догонять выше входа на, %"],
+    ["trade", "stop_buffer_pct", "Отступ стопа под опору, %"],
+    ["trade", "min_stop_pct", "Стоп не ближе, %"],
+    ["trade", "max_stop_pct", "Стоп дальше — предупреждение, %"],
+    ["trade", "min_rr", "Прибыль/риск до 2-й цели не ниже"],
+    ["trade", "valid_s", "План актуален после алерта, с"],
   ]],
   ["Поток агрессора (CVD)", [
     ["cvd", "window_s", "Окно CVD, с"],

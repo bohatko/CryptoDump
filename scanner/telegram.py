@@ -248,37 +248,48 @@ def format_alert_html(alert: "Alert") -> str:
     """
     from datetime import datetime
 
+    esc = html.escape
     when = datetime.fromtimestamp(alert.ts).strftime("%d.%m %H:%M:%S")
-    arrow = "🔻"
     lines: list[str] = [
-        f"{arrow} <b>{html.escape(alert.inst_id)}</b> · окно <b>{html.escape(alert.window_label)}</b>",
-        f"просадка <b>{alert.drop_pct:.2f}%</b> · цена <code>{_px(alert.price)}</code>"
-        f" · максимум <code>{_px(alert.high)}</code>",
+        f"🟢 <b>ПОКУПКА {esc(alert.base)}</b> · лонг {esc(alert.inst_id)}",
+        f"откуп после дампа <b>{alert.drop_pct:.2f}%</b> за {esc(alert.window_label)}"
+        f" (с <code>{_px(alert.high)}</code> до <code>{_px(alert.plan.low if alert.plan else alert.price)}</code>)",
         "",
-        f"<b>Стакан (top-{alert.book.levels})</b>: "
-        f"bid {_money(alert.book.bid_notional)} / ask {_money(alert.book.ask_notional)}"
-        f" · imb {_ratio(alert.book.imbalance)}",
     ]
 
-    wall = alert.book.wall
-    if wall is not None:
+    plan = alert.plan
+    if plan is not None:
+        targets = " · ".join(f"<code>{_px(t)}</code> ({p:+.1f}%)" for t, p in zip(plan.targets, plan.target_pcts()))
+        lines += [
+            f"<b>Вход:</b> <code>{_px(plan.entry)}</code> по рынку, не выше <code>{_px(plan.entry_max)}</code>",
+            f"<b>Стоп:</b> <code>{_px(plan.stop)}</code> ({plan.stop_pct:.1f}%) — под {esc(plan.stop_basis)}",
+            f"<b>Цели:</b> {targets}",
+            f"<b>Прибыль/риск:</b> {' · '.join(f'{r:.1f}' for r in plan.rr)}",
+        ]
+        if plan.qty is not None:
+            lines.append(
+                f"<b>Размер:</b> {_qty(plan.qty)} {esc(alert.base)} ≈ {_money(plan.notional or 0.0)} USDT"
+                f" ({_qty(plan.contracts or 0.0)} контр.) — на стопе −{plan.risk_usdt:g} USDT"
+            )
         lines.append(
-            f"стена на бидах: <code>{_px(wall.px)}</code> × {_money(wall.notional)}"
-            f" ({alert.book.wall_ratio:.1f}× среднего уровня)"
+            f"⏱ актуально до {datetime.fromtimestamp(plan.valid_until).strftime('%H:%M')};"
+            f" ниже <code>{_px(plan.stop)}</code> идея отменяется"
         )
+        lines += [f"⚠️ {esc(w)}" for w in plan.warnings]
     else:
-        lines.append("стены на бидах нет")
+        lines.append(f"цена <code>{_px(alert.price)}</code> · максимум окна <code>{_px(alert.high)}</code>")
 
-    side = "покупка" if alert.cvd.burst_buy_notional >= alert.cvd.burst_sell_notional else "продажа"
+    reasons = alert.reasons()
+    if reasons:
+        lines += ["", f"<b>Почему ({alert.signals.score}/3):</b>"] + [f"• {esc(r)}" for r in reasons]
+
     lines += [
         "",
-        f"<b>CVD {alert.cvd.window_s}s</b>: {_money_signed(alert.cvd.cvd)}"
-        f" · taker {_ratio(alert.cvd.taker_ratio)} ({side})",
-        f"<b>Ликвидации {alert.liq.window_s}s</b>: {_money(alert.liq.earlier_notional)} →"
-        f" {_money(alert.liq.recent_notional)} · затухание {_ratio(alert.liq.decay_ratio)}",
-        "",
-        f"<b>Сигналы {alert.signals.score}/3</b>: {html.escape(', '.join(alert.signals.hits) or '—')}",
-        f"<i>{html.escape(alert.inst_type)} · {when}</i>",
+        f"Стакан {alert.book.levels} ур.: покупатели {_money(alert.book.bid_notional)}"
+        f" / продавцы {_money(alert.book.ask_notional)} USDT",
+        f"Поток {alert.cvd.window_s / 60:g} мин: купили {_money(alert.cvd.buy_notional)}"
+        f" / продали {_money(alert.cvd.sell_notional)} (перевес {_money_signed(alert.cvd.cvd)})",
+        f"<i>{esc(alert.inst_type)} · {when} · не финансовая рекомендация, расчёт по уровням</i>",
     ]
     return "\n".join(lines)
 
@@ -354,6 +365,14 @@ def _money(value: float) -> str:
     if abs(value) >= 1_000:
         return f"{value / 1_000:.0f}k"
     return f"{value:.0f}"
+
+
+def _qty(value: float) -> str:
+    if value >= 100:
+        return f"{value:,.0f}".replace(",", " ")
+    if value >= 1:
+        return f"{value:.2f}".rstrip("0").rstrip(".")
+    return f"{value:.6f}".rstrip("0").rstrip(".")
 
 
 def _money_signed(value: float) -> str:

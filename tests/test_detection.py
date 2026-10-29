@@ -53,5 +53,5 @@ def test_detection_and_alert() -> None:
     text = json.dumps(payload, ensure_ascii=False)
     assert '"score": 3' in text
     assert abs(payload["book"]["wall"]["notional"] - 599_400.0) < 0.01
-    assert "ДАМП TEST-USDT-SWAP" in alert.console_text()
-    assert "score 3/3" in alert.console_text()
+    assert "ПОКУПКА TEST (TEST-USDT-SWAP)" in alert.console_text()
+    assert "сигналов 3/3" in alert.console_text()

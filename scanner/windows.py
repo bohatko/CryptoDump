@@ -86,6 +86,11 @@ class TradeWindow:
             return None
         return best, best_ts
 
+    def low_since(self, since: float, *, now: float) -> float | None:
+        """Минимум сделок с момента ``since`` — дно дампа после пика окна."""
+        lows = [b.low for s, b in self._seconds.items() if since <= s <= now and b.low > 0]
+        return min(lows) if lows else None
+
     def last_price(self) -> float | None:
         if not self._seconds:
             return None
@@ -94,6 +99,9 @@ class TradeWindow:
 
     def last_ts(self) -> float | None:
         return float(max(self._seconds)) if self._seconds else None
+
+    def first_ts(self) -> float | None:
+        return float(min(self._seconds)) if self._seconds else None
 
     def has_data(self, *, now: float, window_s: int) -> bool:
         start = now - window_s
@@ -204,6 +212,11 @@ class CandleBook:
             return None
         peak = max(candles, key=lambda c: c.high)
         return peak.high, peak.ts
+
+    def low_since(self, since: float, *, now: float) -> float | None:
+        """Минимум свечей, открытых не раньше свечи с ``since``."""
+        lows = [c.low for c in self._candles.values() if c.end_ts > since and c.ts <= now and c.low > 0]
+        return min(lows) if lows else None
 
     def last_price(self, *, fallback: float | None = None) -> float | None:
         if not self._candles:
@@ -337,6 +350,19 @@ class DropWindows:
             window_s=window_s,
             threshold_pct=threshold_pct,
         )
+
+    def low_since(self, since: float, *, now: float) -> float | None:
+        """Дно после пика: по сделкам, если они покрывают весь период, иначе ещё и по свечам.
+
+        Свеча, в которой был пик, может содержать минимум до пика — поэтому свечи
+        берутся только когда сделок с того момента нет (сканер стартовал позже).
+        """
+        by_trades = self.trades.low_since(since, now=now)
+        first = self.trades.first_ts()
+        if by_trades is not None and first is not None and first <= since:
+            return by_trades
+        found = [v for v in (by_trades, self.candles.low_since(since, now=now)) if v]
+        return min(found) if found else None
 
     def _peak(self, window_s: int, *, now: float) -> tuple[float, float] | None:
         if window_s <= self.precise_until_s and self.trades.has_data(now=now, window_s=window_s):

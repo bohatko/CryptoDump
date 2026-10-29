@@ -163,6 +163,7 @@ class Dashboard:
                     "subscriptions": len(stream.subscriptions),
                     "books": sum(1 for s in stream.subscriptions if s.channel == "books"),
                     "reconnects": max(0, stream.reconnects - 1),
+                    "budget": stream.budget(now=now),
                 }
             )
         slots_used = len(scheduler.slots()) if scheduler is not None else len(e.static_books)
@@ -189,6 +190,7 @@ class Dashboard:
                 "slots": slots_used,
                 "slotsLimit": cfg.depth.book_slots,
                 "pending": len(scheduler.pending()) if scheduler is not None else 0,
+                "cooling": len(scheduler.cooling()) if scheduler is not None else 0,
                 "ttlS": cfg.depth.book_ttl_s,
             },
             "activeDrops": len(e.monitor.active()),

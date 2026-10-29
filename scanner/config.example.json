@@ -50,7 +50,9 @@
     "store_levels": 100,
     "mode": "ondemand",
     "book_slots": 20,
-    "book_ttl_s": 180
+    "book_ttl_s": 180,
+    "book_min_hold_s": 30.0,
+    "book_retry_s": 600.0
   },
   "cvd": {
     "window_s": 300,
@@ -100,6 +102,21 @@
     "state_save_interval_s": 30.0,
     "state_max_age_s": 900.0,
     "log_level": "INFO"
+  },
+  "trade": {
+    "enabled": true,
+    "entry_slippage_pct": 0.3,
+    "stop_buffer_pct": 0.3,
+    "min_stop_pct": 0.6,
+    "max_stop_pct": 4.0,
+    "targets_retrace": [
+      0.382,
+      0.618,
+      1.0
+    ],
+    "risk_usdt": 0.0,
+    "valid_s": 900.0,
+    "min_rr": 1.0
   },
   "dashboard": {
     "enabled": true,

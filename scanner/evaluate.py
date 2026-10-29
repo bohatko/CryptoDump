@@ -19,6 +19,7 @@ from .config import Config
 from .detection import detect_signals, passed_liquidity, score_ok
 from .instrument import InstrumentState
 from .models import Alert, BookSummary, DropHit, Signals
+from .plan import build_plan
 
 log = logging.getLogger(__name__)
 
@@ -91,6 +92,16 @@ def evaluate_instrument(
         return None
 
     report(STATUS_ALERT, _signals_detail(signals))
+    plan = build_plan(
+        cfg.trade,
+        price=price,
+        high=deep.high,
+        low=state.drops.low_since(deep.high_ts, now=now),
+        book=book,
+        ct_val=state.ct_val,
+        tick_sz=state.tick_sz,
+        now=now,
+    )
     return Alert(
         ts=now,
         inst_id=state.inst_id,
@@ -105,6 +116,7 @@ def evaluate_instrument(
         liq=liq,
         signals=signals,
         sibling_windows=[d.window_label for d in drops if d.window_s != deep.window_s],
+        plan=plan,
     )
 
 

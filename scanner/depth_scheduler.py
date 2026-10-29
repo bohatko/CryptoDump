@@ -17,6 +17,11 @@
 
 Так детекция работает по всему рынку, а дорогие данные платятся только за те
 инструменты, которые прямо сейчас интересны.
+
+Каждая выдача и освобождение слота — запрос к OKX, а их 480 в час на соединение.
+Поэтому слот не отбирается раньше ``book_min_hold_s`` (иначе две просадки забирают
+его друг у друга каждую секунду), а освобождённый инструмент ``book_retry_s`` не
+получает стакан снова — кроме случая, когда его просадка стала в 1.5 раза глубже.
 """
 
 from __future__ import annotations
@@ -31,6 +36,9 @@ from .instrument import InstrumentState
 from .okx_ws import OkxPublicStream
 
 log = logging.getLogger(__name__)
+
+# во сколько раз должна углубиться просадка, чтобы стакан вернули раньше book_retry_s
+RETRY_DEEPER = 1.5
 
 
 @dataclass
@@ -55,6 +63,7 @@ class DepthScheduler:
     stream: OkxPublicStream | None = None
     _slots: dict[str, Slot] = field(default_factory=dict)
     _pending: dict[str, float] = field(default_factory=dict)  # inst_id -> последняя известная просадка
+    _released: dict[str, tuple[float, float]] = field(default_factory=dict)  # inst_id -> (когда, просадка)
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     # ---------- учёт потребности ----------
@@ -90,13 +99,19 @@ class DepthScheduler:
     def pending(self) -> dict[str, float]:
         return dict(self._pending)
 
+    def cooling(self) -> dict[str, float]:
+        """Инструменты, которым стакан пока не выдаётся повторно: inst_id → секунд до конца паузы."""
+        now = time.time()
+        retry = self.cfg.depth.book_retry_s
+        return {iid: retry - (now - at) for iid, (at, _drop) in self._released.items() if now - at < retry}
+
     async def release(self, inst_id: str) -> bool:
         """Освободить слот вручную (из дашборда)."""
         async with self._lock:
             self._pending.pop(inst_id, None)
             if inst_id not in self._slots:
                 return False
-            await self._release(inst_id)
+            await self._release(inst_id, now=time.time())
             return True
 
     # ---------- обслуживание ----------
@@ -125,9 +140,22 @@ class DepthScheduler:
         ttl = max(30.0, self.cfg.depth.book_ttl_s)
         expired = [inst_id for inst_id, slot in self._slots.items() if now - slot.last_used > ttl]
         for inst_id in expired:
-            await self._release(inst_id)
+            await self._release(inst_id, now=now)
         if expired:
             log.debug("освобождено слотов стакана: %d", len(expired))
+        retry = self.cfg.depth.book_retry_s
+        self._released = {iid: rel for iid, rel in self._released.items() if now - rel[0] < retry}
+
+    def _cooling_down(self, inst_id: str, drop_pct: float, now: float) -> bool:
+        released = self._released.get(inst_id)
+        if released is None:
+            return False
+        at, was = released
+        if now - at >= self.cfg.depth.book_retry_s:
+            del self._released[inst_id]
+            return False
+        # просадки отрицательные: «в 1.5 раза глубже» = меньше в 1.5 раза
+        return drop_pct > was * RETRY_DEEPER
 
     async def _grant_pending(self, now: float) -> None:
         if not self._pending:
@@ -143,11 +171,16 @@ class DepthScheduler:
             if inst_id in self._slots:
                 self._pending.pop(inst_id, None)
                 continue
+            if self._cooling_down(inst_id, candidate_drop, now):
+                # стакан только что был и ничего не дал — очередь не занимаем,
+                # want() вернёт инструмент сюда, если просадка продолжится
+                self._pending.pop(inst_id, None)
+                continue
 
             # Если слотов нет — вытесняем только того, кто СЛАБЕЕ кандидата.
             # Просадка отрицательна: глубже = меньше.
             while len(self._slots) >= slots_limit:
-                victim = self._weakest_slot()
+                victim = self._weakest_slot(now)
                 if victim is None or victim.drop_pct <= candidate_drop:
                     log.debug(
                         "слоты стакана заняты, %s ждёт (%.2f%% против %.2f%%)",
@@ -163,7 +196,7 @@ class DepthScheduler:
                     inst_id,
                     candidate_drop,
                 )
-                await self._release(victim.inst_id)
+                await self._release(victim.inst_id, now=now)
 
             if await self._subscribe(inst_id):
                 self._pending.pop(inst_id, None)
@@ -174,11 +207,14 @@ class DepthScheduler:
                     drop_pct=candidate_drop,
                 )
 
-    def _weakest_slot(self) -> Slot | None:
-        """Занятый слот с наименее интересным инструментом (ближайшая к нулю просадка)."""
-        if not self._slots:
+    def _weakest_slot(self, now: float) -> Slot | None:
+        """Слот с наименее интересным инструментом (ближайшая к нулю просадка) среди тех,
+        что прожили ``book_min_hold_s``: свежий слот ещё не успел дать стакан."""
+        hold = self.cfg.depth.book_min_hold_s
+        candidates = [s for s in self._slots.values() if now - s.subscribed_at >= hold]
+        if not candidates:
             return None
-        return max(self._slots.values(), key=lambda s: s.drop_pct)
+        return max(candidates, key=lambda s: s.drop_pct)
 
     async def _subscribe(self, inst_id: str) -> bool:
         if self.stream is None:
@@ -188,8 +224,10 @@ class DepthScheduler:
             log.info("%s: стакан подключён по требованию", inst_id)
         return ok
 
-    async def _release(self, inst_id: str) -> None:
-        self._slots.pop(inst_id, None)
+    async def _release(self, inst_id: str, *, now: float) -> None:
+        slot = self._slots.pop(inst_id, None)
+        if slot is not None:
+            self._released[inst_id] = (now, slot.drop_pct)
         if self.stream is not None:
             await self.stream.unsubscribe([{"channel": "books", "instId": inst_id}])
         state = self.states.get(inst_id)

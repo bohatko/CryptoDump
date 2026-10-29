@@ -28,6 +28,13 @@ from .okx_ws import OkxPublicStream
 
 log = logging.getLogger(__name__)
 
+# Пауза между переподписками одного стакана растёт вдвое с каждой попыткой: ресинк
+# стоит два запроса из лимита 480 в час на соединение, а стакан, который не чинится
+# с первого раза, обычно не чинится и с десятого (подписку отклонила биржа).
+RESYNC_BACKOFF_MAX_S = 120.0
+# столько секунд стакан должен быть исправен, чтобы счётчик попыток обнулился
+RESYNC_HEALTHY_S = 60.0
+
 
 class DepthGuard:
     def __init__(
@@ -49,6 +56,7 @@ class DepthGuard:
         self._semaphore = asyncio.Semaphore(max(1, cfg.depth.concurrency))
         self._resync_queue: set[str] = set()  # инструменты, которым нужен полный снимок
         self._last_resync: dict[str, float] = {}  # когда последний раз переподписывали books
+        self._attempts: dict[str, int] = {}  # переподписок подряд без восстановления
 
     def schedule_resync(self, state: InstrumentState) -> None:
         """Пометить инструмент на перезапрос полного снимка стакана."""
@@ -81,17 +89,19 @@ class DepthGuard:
     async def resync_ws_books(self, *, now: float | None = None) -> None:
         """Переподписать ``books`` для инструментов с протухшим или разорванным стаканом."""
         now = time.time() if now is None else now
-        # Кулдаун: переподписка может не дать снимок (биржа не ответила, канал занят),
-        # и без паузы инструмент переподписывался бы каждую секунду — это шторм
-        # запросов и риск бана по лимитам.
-        cooldown = max(5.0, self.cfg.depth.poll_interval_s)
-        pending = [
-            state
-            for state in list(self.states.values())
-            if self.has_book(state.inst_id)
-            and (state.inst_id in self._resync_queue or state.book.needs_resync(self.cfg.depth, now=now))
-            and (now - self._last_resync.get(state.inst_id, 0.0)) >= cooldown
-        ]
+        pending = []
+        for state in list(self.states.values()):
+            iid = state.inst_id
+            if not self.has_book(iid):
+                self._attempts.pop(iid, None)
+                continue
+            broken = iid in self._resync_queue or state.book.needs_resync(self.cfg.depth, now=now)
+            if not broken:
+                if now - self._last_resync.get(iid, 0.0) >= RESYNC_HEALTHY_S:
+                    self._attempts.pop(iid, None)
+                continue
+            if now - self._last_resync.get(iid, 0.0) >= self.cooldown(iid):
+                pending.append(state)
         # разрывы у инструментов без стакана (слот уже отдан) чинить незачем
         self._resync_queue = {iid for iid in self._resync_queue if self.has_book(iid)}
         if not pending:
@@ -106,12 +116,24 @@ class DepthGuard:
             self._last_resync[state.inst_id] = now
             ok = await stream.resubscribe({"channel": "books", "instId": state.inst_id})
             if ok:
+                attempt = self._attempts.get(state.inst_id, 0) + 1
+                self._attempts[state.inst_id] = attempt
                 self._resync_queue.discard(state.inst_id)
                 # до прихода нового snapshot помечаем стакан неавторитетным,
                 # чтобы устаревшие метрики не попали в алерт
                 state.book.authoritative = False
                 state.book.gaps += 1
-                log.info("%s: переподписка books для ресинка стакана", state.inst_id)
+                log.info(
+                    "%s: переподписка books для ресинка стакана (попытка %d, следующая не раньше чем через %.0f c)",
+                    state.inst_id,
+                    attempt,
+                    self.cooldown(state.inst_id),
+                )
+
+    def cooldown(self, inst_id: str) -> float:
+        """Пауза перед следующей переподпиской: 5, 10, 20… секунд, не больше 2 минут."""
+        base = max(5.0, self.cfg.depth.poll_interval_s)
+        return min(RESYNC_BACKOFF_MAX_S, base * 2 ** self._attempts.get(inst_id, 0))
 
     async def refresh_stale_books(self, *, force: bool = False, now: float | None = None) -> None:
         """REST-режим: опросить инструменты, которым нужен свежий снимок."""

@@ -16,6 +16,7 @@ class InstrumentState:
     inst_id: str
     inst_type: str
     ct_val: float = 1.0
+    tick_sz: float = 0.0  # шаг цены: уровни плана сделки округляются до него
     turnover: float = 0.0  # оборот за 24ч в USDT: приоритет для слотов стакана
     max_window_s: int = 7200
     cvd_window_s: int = 300

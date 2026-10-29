@@ -169,7 +169,7 @@ class History:
         clause = f" WHERE {' AND '.join(where)}" if where else ""
         total = self._count(f"SELECT COUNT(*) FROM alerts{clause}", params)
         rows = self._db.execute(
-            "SELECT id, ts, inst_id, inst_type, win, drop_pct, price, score, hits, total_notional"
+            "SELECT id, ts, inst_id, inst_type, win, drop_pct, price, score, hits, total_notional, payload"
             f" FROM alerts{clause} ORDER BY ts DESC, id DESC LIMIT ? OFFSET ?",
             (*params, _limit(limit), max(0, offset)),
         ).fetchall()
@@ -185,6 +185,7 @@ class History:
                 "score": r["score"],
                 "hits": [h for h in (r["hits"] or "").split(",") if h],
                 "totalNotional": r["total_notional"],
+                "plan": _plan_brief(r["payload"]),
             }
             for r in rows
         ]
@@ -302,3 +303,14 @@ class History:
 
 def _limit(limit: int) -> int:
     return max(1, min(int(limit), MAX_LIMIT))
+
+
+def _plan_brief(payload: str | None) -> dict[str, Any] | None:
+    """Уровни плана для таблицы алертов (у старых алертов плана нет)."""
+    try:
+        plan = json.loads(payload or "{}").get("plan")
+    except (ValueError, AttributeError):
+        return None
+    if not isinstance(plan, dict):
+        return None
+    return {k: plan.get(k) for k in ("entry", "stop", "stopPct", "targets", "targetPcts", "rr", "warnings")}

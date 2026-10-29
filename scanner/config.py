@@ -86,6 +86,12 @@ class DepthConfig:
     # сколько секунд держать стакан после последнего срабатывания (чтобы вторая
     # волна дампа и оценка сигнатур успели отработать на живых данных)
     book_ttl_s: float = 180.0
+    # Каждая подписка/отписка — запрос к OKX, а их 480 в час на соединение. Поэтому
+    # слот нельзя отобрать раньше book_min_hold_s (иначе две просадки отбирают его
+    # друг у друга каждую секунду), а освобождённый стакан не выдаётся тому же
+    # инструменту book_retry_s секунд — если только просадка не стала в 1.5 раза глубже.
+    book_min_hold_s: float = 30.0
+    book_retry_s: float = 600.0
     # запас глубины: сколько уровней хранить, чтобы при выедании верхних было что
     # подтянуть снизу. Считаем всегда ровно по levels.
     store_levels: int = 100
@@ -142,6 +148,29 @@ class EngineConfig:
 
 
 @dataclass
+class TradeConfig:
+    """План сделки в алерте: вход, стоп, цели. Механический расчёт по уровням дампа."""
+
+    enabled: bool = True
+    # не догонять: выше entry × (1 + entry_slippage_pct%) входить уже поздно
+    entry_slippage_pct: float = 0.3
+    # стоп ставится под опору (стена покупателя или дно дампа) с этим отступом
+    stop_buffer_pct: float = 0.3
+    # стоп ближе этого выбьет обычный шум — отодвигаем
+    min_stop_pct: float = 0.6
+    # стоп дальше — сделка помечается как рискованная
+    max_stop_pct: float = 4.0
+    # цели — доли отката дампа от дна к максимуму окна (1.0 = возврат к максимуму)
+    targets_retrace: list[float] = field(default_factory=lambda: [0.382, 0.618, 1.0])
+    # сколько USDT готовы потерять на стопе; 0 — размер позиции не считать
+    risk_usdt: float = 0.0
+    # сколько секунд после алерта план считается актуальным
+    valid_s: float = 900.0
+    # ниже этого «прибыль/риск» до второй цели сделка помечается как слабая
+    min_rr: float = 1.0
+
+
+@dataclass
 class DashboardConfig:
     enabled: bool = True
     # По умолчанию только локальный доступ. На другой адрес дашборд поднимется лишь
@@ -170,6 +199,7 @@ class Config:
     signals: SignalsConfig = field(default_factory=SignalsConfig)
     alerts: AlertsConfig = field(default_factory=AlertsConfig)
     engine: EngineConfig = field(default_factory=EngineConfig)
+    trade: TradeConfig = field(default_factory=TradeConfig)
     dashboard: DashboardConfig = field(default_factory=DashboardConfig)
     source_path: str | None = None
     _thresholds_cache: tuple[tuple[tuple[str, float], ...], list[tuple[int, float]]] | None = field(
@@ -290,6 +320,7 @@ def config_from_dict(data: dict[str, Any], source_path: str | None = None) -> Co
         ("signals", SignalsConfig),
         ("alerts", AlertsConfig),
         ("engine", EngineConfig),
+        ("trade", TradeConfig),
         ("dashboard", DashboardConfig),
     ):
         section = data.get(name)
