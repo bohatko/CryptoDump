@@ -141,6 +141,33 @@ def test_released_instrument_waits_before_new_slot(now: float) -> None:
     assert "B-USDT-SWAP" in sched.active()  # у B паузы не было
 
 
+def test_slow_feed_sheds_weakest_books_and_recovers(now: float) -> None:
+    """Сделки опаздывают — стаканы забили канал: урезаем слоты, отпуская самые слабые просадки."""
+    names = [f"X{i}-USDT-SWAP" for i in range(9)]
+    states = {n: make_state(n, drop_pct=-2.0 - i, now=now) for i, n in enumerate(names)}
+    sched, stream = _scheduler(states, slots=9)
+    for i, n in enumerate(names):
+        sched.want(n, drop_pct=-2.0 - i, now=now)
+    asyncio.run(sched.tick(now=now))
+    assert len(sched.active()) == 9
+
+    sched.throttle(8.0, now=now + 1)
+    assert sched.limit() == 6
+    sched.throttle(8.0, now=now + 10)
+    assert sched.limit() == 6  # очередь в канале рассасывается не сразу — второй раз не режем
+    asyncio.run(sched.tick(now=now + 10))
+    assert sorted(sched.active()) == sorted(names[3:])  # ушли -2, -3, -4 %
+    assert stream.unsubscribed == names[:3]
+
+    sched.throttle(0.1, now=now + 60)
+    assert sched.limit() == 6  # рано
+    sched.throttle(0.1, now=now + 1 + 120)
+    assert sched.limit() == 7
+    for k in range(2, 4):
+        sched.throttle(0.1, now=now + 1 + 120 * k)
+    assert sched.limit() == 9 and sched._cap is None
+
+
 def test_failed_subscribe_keeps_pending(now: float) -> None:
     """Неудачная подписка не создаёт слот: инструмент остаётся в очереди."""
     states = {"X0-USDT-SWAP": make_state("X0-USDT-SWAP", drop_pct=-5.0, now=now)}

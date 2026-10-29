@@ -9,6 +9,7 @@ from test_evaluate import _dumped_state
 from scanner.config import Config, config_from_dict
 from scanner.engine import BOOK_GRACE_S, Engine
 from scanner.history import History
+from scanner.models import TradePlan
 
 
 def _engine(**depth: object) -> Engine:
@@ -93,6 +94,26 @@ def test_rest_source_treats_every_book_as_available(now: float) -> None:
 
     alerts = asyncio.run(engine._evaluate_all(now=now))
     assert [a.inst_id for a in alerts] == [state.inst_id]
+
+
+def test_late_feed_warns_in_trade_plan(now: float) -> None:
+    """Данные опаздывают на секунды — вход по цене алерта уже не тот, план должен это сказать."""
+    engine = _engine(source="rest")
+    state = _dumped_state(now)
+    engine.states[state.inst_id] = state
+    (alert,) = asyncio.run(engine._evaluate_all(now=now))
+    alert.plan = TradePlan(
+        entry=96.0, entry_max=96.2, stop=95.0, stop_basis="дном дампа 95.3", targets=[97.0], rr=[1.0], low=95.3,
+        valid_until=now + 900,
+    )
+
+    engine._check_feed_lag([alert], now=now)
+    assert alert.plan.warnings == [] and engine.feed_lag_s is None  # сделок ещё не было
+
+    engine.router.trade_lag.add(20.0, now=now)
+    engine._check_feed_lag([alert], now=now)
+    assert engine.feed_lag_s == 20.0
+    assert any("опаздывают на 20 c" in w for w in alert.plan.warnings)
 
 
 def test_evaluation_feeds_history(now: float) -> None:

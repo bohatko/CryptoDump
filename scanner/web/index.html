@@ -296,7 +296,8 @@ function renderHeader() {
     ["аптайм", fmtDur(s.uptimeS)],
     ["инструментов", s.instruments],
     ["WS", ws],
-    ["стаканы", `${s.depth.slots}/${s.depth.slotsLimit}${s.depth.pending ? " (+" + s.depth.pending + " ждут)" : ""} · ${s.depth.mode}`],
+    ["задержка", s.feedLagS == null ? "—" : `<span class="${s.feedLagS >= 3 ? "neg" : ""}" title="на сколько сделки приходят позже биржи (медиана 30 c); норма ~0.1 c">${s.feedLagS.toFixed(1)} c</span>`],
+    ["стаканы", `${s.depth.slots}/${s.depth.slotsLimit}${s.depth.slotsLimit < s.depth.slotsConfigured ? ` <span class="neg" title="урезано из-за задержки данных; вернётся само, когда канал разгрузится">(из ${s.depth.slotsConfigured})</span>` : ""}${s.depth.pending ? " (+" + s.depth.pending + " ждут)" : ""} · ${s.depth.mode}`],
     ["алертов", s.alertsSent],
     ["оценка", s.lastEvalMs ? s.lastEvalMs + " мс" : "—"],
     ["ошибок 5 мин", `<span class="${s.logs.errors5m ? "neg" : ""}">${s.logs.errors5m}</span>`],
@@ -310,6 +311,7 @@ function renderHeader() {
 
   const banners = [];
   if (!ONLINE) banners.push(`<div class="banner bad">Нет связи со сканером — переподключаюсь… (если нажимали «Перезапуск», это нормально)</div>`);
+  if (s.feedLagS != null && s.feedLagS >= 3) banners.push(`<div class="banner warn">Данные OKX опаздывают на <b>${s.feedLagS.toFixed(0)} c</b> (норма ~0.1 c): канал до биржи не успевает — медленный VPN или сеть. Цены в алертах устаревшие. Сканер сам урезает число стаканов; если не помогает — нужен канал быстрее (другой сервер VPN или запуск на VPS).</div>`);
   if (s.pendingRestart.length) banners.push(`<div class="banner warn">Сохранены настройки, которые применятся только после перезапуска: <b>${esc(s.pendingRestart.join(", "))}</b><span class="spacer"></span><button onclick="doRestart()">Перезапустить</button></div>`);
   if (s.logs.errors5m >= 10) banners.push(`<div class="banner warn">За 5 минут ${s.logs.errors5m} ошибок в журнале — загляните во вкладку «Журнал».</div>`);
   if (s.muted) banners.push(`<div class="banner warn">Тихий режим: алерты пишутся в историю, но в Telegram и вебхук не уходят.</div>`);

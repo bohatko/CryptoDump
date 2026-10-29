@@ -38,6 +38,27 @@ def test_trades_use_ct_val_and_keep_latest(now: float) -> None:
     assert abs(snap.sell_notional - 1770.0) < 1e-6
 
 
+def test_trade_lag_is_median_of_newest_trade_per_batch(now: float) -> None:
+    """Задержку считаем по самой свежей сделке пачки: старые в той же пачке — это история, не опоздание."""
+    state = InstrumentState("BTC-USDT-SWAP", "SWAP")
+    router, _ = _router(state)
+    assert router.trade_lag.value(now=now) is None
+
+    for lag in (0.1, 0.2, 20.0):
+        router.route(
+            {
+                "arg": {"channel": "trades", "instId": "BTC-USDT-SWAP"},
+                "data": [
+                    {"px": "1", "sz": "1", "side": "buy", "ts": _ms(now - lag)},
+                    {"px": "1", "sz": "1", "side": "buy", "ts": _ms(now - 60)},
+                ],
+            },
+            now=now,
+        )
+    assert abs(router.trade_lag.value(now=now) - 0.2) < 1e-3  # один выброс медиану не сдвигает
+    assert router.trade_lag.value(now=now + 31) is None  # окно 30 c
+
+
 def test_candles_routed(now: float) -> None:
     state = InstrumentState("BTC-USDT-SWAP", "SWAP")
     router, _ = _router(state)

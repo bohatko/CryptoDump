@@ -51,6 +51,9 @@ log = logging.getLogger(__name__)
 
 # сколько ждать первый snapshot после подписки, прежде чем сторож начнёт чинить слот
 BOOK_GRACE_S = 5.0
+# OKX отдаёт сделку за ~0.1 c; с опозданием в секунды вход по цене алерта уже не тот
+FEED_LAG_WARN_S = 3.0
+FEED_LAG_LOG_EVERY_S = 300.0
 
 
 class ScanStartupError(RuntimeError):
@@ -83,6 +86,8 @@ class Engine:
         self.phase = "старт"
         self.last_eval_at = 0.0
         self.last_eval_ms = 0.0
+        self.feed_lag_s: float | None = None
+        self._lag_warned_at = 0.0
         # main.py пересоздаёт движок, если остановка запрошена как перезапуск (дашборд)
         self.restart_requested = False
 
@@ -412,12 +417,31 @@ class Engine:
         closed = self.monitor.sweep(now=now)
         if closed:
             self._record(lambda h: [h.add_episode(ep) for ep in closed])
+        self._check_feed_lag(alerts, now=now)
         self.last_eval_at = now
         self.last_eval_ms = (time.perf_counter() - started) * 1000.0
 
         if alerts:
             await asyncio.gather(*(self._publish(alert) for alert in alerts), return_exceptions=True)
         return alerts
+
+    def _check_feed_lag(self, alerts: list[Alert], *, now: float) -> None:
+        lag = self.router.trade_lag.value(now=now)
+        self.feed_lag_s = lag
+        if self.depth_scheduler is not None:
+            self.depth_scheduler.throttle(lag, now=now)
+        if lag is None or lag < FEED_LAG_WARN_S:
+            return
+        for alert in alerts:
+            if alert.plan is not None:
+                alert.plan.warnings.append(f"данные биржи опаздывают на {lag:.0f} c — сверьте цену перед входом")
+        if now - self._lag_warned_at >= FEED_LAG_LOG_EVERY_S:
+            self._lag_warned_at = now
+            log.warning(
+                "сделки приходят с опозданием %.1f c (норма ~0.1 c): канал до OKX не успевает — "
+                "медленный VPN/сеть; слоты стакана урезаются автоматически, иначе нужен канал быстрее",
+                lag,
+            )
 
     def _observe(self, inst_id: str, drop: DropHit, status: str, detail: str, *, now: float) -> None:
         self.monitor.observe(inst_id, drop, status, detail, now=now)

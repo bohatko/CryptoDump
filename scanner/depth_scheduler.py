@@ -22,6 +22,11 @@
 Поэтому слот не отбирается раньше ``book_min_hold_s`` (иначе две просадки забирают
 его друг у друга каждую секунду), а освобождённый инструмент ``book_retry_s`` не
 получает стакан снова — кроме случая, когда его просадка стала в 1.5 раза глубже.
+
+Стаканы — основная часть трафика. Если канал до биржи узкий (медленный VPN), они
+забивают его, и сделки начинают приходить с опозданием в секунды — цены в алертах
+устаревают. Поэтому ``throttle`` по задержке сделок урезает число слотов в 1.5 раза
+(не чаще раза в ``SHRINK_EVERY_S``) и по одному возвращает их, когда канал разгрузился.
 """
 
 from __future__ import annotations
@@ -39,6 +44,16 @@ log = logging.getLogger(__name__)
 
 # во сколько раз должна углубиться просадка, чтобы стакан вернули раньше book_retry_s
 RETRY_DEEPER = 1.5
+
+# Задержка сделок, с которой канал считается перегруженным, и с которой — свободным.
+# Сделки OKX в норме приходят за ~0.1 c; 20 стаканов через VPN ~150 КБ/с давали 4–20 c.
+OVERLOAD_LAG_S = 3.0
+RECOVERED_LAG_S = 1.0
+# Задержка — медиана за 30 c, и очередь в канале рассасывается не сразу: чаще урезать нельзя,
+# иначе одна перегрузка срезала бы слоты до минимума.
+SHRINK_EVERY_S = 30.0
+GROW_EVERY_S = 120.0
+MIN_SLOTS = 2
 
 
 @dataclass
@@ -65,6 +80,41 @@ class DepthScheduler:
     _pending: dict[str, float] = field(default_factory=dict)  # inst_id -> последняя известная просадка
     _released: dict[str, tuple[float, float]] = field(default_factory=dict)  # inst_id -> (когда, просадка)
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    _cap: int | None = None  # урезанный из-за перегрузки канала лимит слотов; None — book_slots
+    _cap_changed_at: float = 0.0
+
+    def limit(self) -> int:
+        """Сколько слотов можно занять сейчас: ``book_slots`` или меньше, если канал перегружен."""
+        slots = max(1, self.cfg.depth.book_slots)
+        return slots if self._cap is None else min(slots, self._cap)
+
+    def throttle(self, lag_s: float | None, *, now: float | None = None) -> None:
+        """Подстроить число слотов под задержку сделок (вызывается из оценки)."""
+        if lag_s is None:
+            return
+        now = time.time() if now is None else now
+        slots = max(1, self.cfg.depth.book_slots)
+        current = self.limit()
+        if lag_s >= OVERLOAD_LAG_S:
+            if now - self._cap_changed_at < SHRINK_EVERY_S:
+                return
+            # урезаем от реально занятых: лимит 20 при 6 занятых ничего бы не изменил
+            base = min(current, len(self._slots)) if self._slots else current
+            cap = max(MIN_SLOTS, base * 2 // 3)
+            if cap >= current:
+                return
+            self._cap, self._cap_changed_at = cap, now
+            log.warning(
+                "сделки опаздывают на %.1f c — канал до OKX перегружен, слотов стакана: %d (из %d)",
+                lag_s,
+                cap,
+                slots,
+            )
+        elif lag_s < RECOVERED_LAG_S and self._cap is not None and now - self._cap_changed_at >= GROW_EVERY_S:
+            cap = current + 1
+            self._cap = None if cap >= slots else cap
+            self._cap_changed_at = now
+            log.info("канал до OKX разгрузился, слотов стакана: %d (из %d)", min(cap, slots), slots)
 
     # ---------- учёт потребности ----------
 
@@ -134,7 +184,14 @@ class DepthScheduler:
         now = time.time() if now is None else now
         async with self._lock:
             await self._evict_expired(now)
+            await self._shed_surplus(now)
             await self._grant_pending(now)
+
+    async def _shed_surplus(self, now: float) -> None:
+        """Лимит урезан перегрузкой — отпускаем самые слабые просадки, не дожидаясь min_hold."""
+        while len(self._slots) > self.limit():
+            victim = max(self._slots.values(), key=lambda s: s.drop_pct)
+            await self._release(victim.inst_id, now=now)
 
     async def _evict_expired(self, now: float) -> None:
         ttl = max(30.0, self.cfg.depth.book_ttl_s)
@@ -161,7 +218,7 @@ class DepthScheduler:
         if not self._pending:
             return
 
-        slots_limit = max(1, self.cfg.depth.book_slots)
+        slots_limit = self.limit()
         # Самые глубокие просадки получают слот первыми. Берём просадку, сохранённую
         # в want(): она пришла из той же оценки, что и запрос, поэтому не зависит от
         # того, «свежее» ли сейчас состояние инструмента.

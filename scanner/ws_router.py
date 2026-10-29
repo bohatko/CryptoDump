@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections import deque
 from collections.abc import Callable
 
 from .config import Config
@@ -20,6 +21,32 @@ log = logging.getLogger(__name__)
 LIQUIDATION_CHANNELS = frozenset({"liquidation-orders", "liquidation-orders-filtered"})
 
 ChannelHandler = Callable[[InstrumentState, dict, list[dict], float], None]
+
+# окно, за которое считается задержка потока: короче — дёргается на одиночных пачках
+LAG_WINDOW_S = 30.0
+
+
+class LagMeter:
+    """Насколько сделки приходят позже, чем случились на бирже (медиана за окно).
+
+    OKX отдаёт сделку за ~0.1 c. Если медиана — секунды, канал до биржи не успевает
+    (медленный VPN, перегруженная сеть): цена в алерте уже устарела.
+    """
+
+    def __init__(self, window_s: float = LAG_WINDOW_S) -> None:
+        self.window_s = window_s
+        self._samples: deque[tuple[float, float]] = deque(maxlen=5000)
+
+    def add(self, lag_s: float, *, now: float) -> None:
+        self._samples.append((now, max(0.0, lag_s)))
+
+    def value(self, *, now: float) -> float | None:
+        while self._samples and now - self._samples[0][0] > self.window_s:
+            self._samples.popleft()
+        if not self._samples:
+            return None
+        lags = sorted(lag for _, lag in self._samples)
+        return lags[len(lags) // 2]
 
 
 class WsRouter:
@@ -39,6 +66,7 @@ class WsRouter:
         self.states = states
         self.cfg = cfg
         self._on_book_gap = on_book_gap
+        self.trade_lag = LagMeter()
         self._handlers: dict[str, ChannelHandler] = {
             "trades": self._trades,
             "candle1m": self._candles,
@@ -72,15 +100,19 @@ class WsRouter:
     # ---------- каналы по instId ----------
 
     def _trades(self, state: InstrumentState, _payload: dict, data: list[dict], now: float) -> None:
+        newest = 0.0
         for row in data:
             trade = parse_trade(state.inst_id, row, ct_val=state.ct_val)
             if trade is None:
                 continue
+            newest = max(newest, trade.ts)
             # данные приходят пачкой и не гарантируют порядок — держим самую свежую сделку
             if state.last_trade is None or trade.ts >= state.last_trade.ts:
                 state.last_trade = trade
             state.trades.add(trade, now=now)
         state.trades.trim(now=now)
+        if newest > 0:
+            self.trade_lag.add(now - newest, now=now)
 
     def _candles(self, state: InstrumentState, _payload: dict, data: list[dict], _now: float) -> None:
         for row in data:
