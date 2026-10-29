@@ -43,8 +43,9 @@ class TelegramConfig:
     disable_notification: bool = False
     disable_web_page_preview: bool = True
     min_interval_s: float = 1.0  # пауза между сообщениями в один чат
-    timeout_s: float = 10.0
-    retries: int = 3
+    # с запасом: через медленный VPN стаканы забивают канал, и 10 c на запрос не хватало
+    timeout_s: float = 20.0
+    retries: int = 4
 
 
 class TelegramError(RuntimeError):

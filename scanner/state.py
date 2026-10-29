@@ -43,7 +43,19 @@ def save_state(
 ) -> bool:
     """Записать состояние на диск. Возвращает ``False``, если записать не удалось."""
     now = time.time() if now is None else now
-    payload: dict[str, Any] = {
+    return write_state(path, state_payload(trades=trades, liq=liq, cooldown=cooldown, now=now), now=now)
+
+
+def state_payload(
+    *,
+    trades: dict[str, TradeWindow],
+    liq: dict[str, LiquidationTracker],
+    cooldown: Cooldown,
+    now: float,
+) -> dict[str, Any]:
+    """Снимок состояния. Собирать в потоке event loop: обход словарей, которые этот
+    же loop меняет, из другого потока падает с «dictionary changed size during iteration»."""
+    return {
         "version": STATE_VERSION,
         "savedAt": now,
         "trades": {
@@ -63,9 +75,11 @@ def save_state(
         },
     }
 
-    target = Path(path)
+
+def write_state(path: str | Path, payload: dict[str, Any], *, now: float) -> bool:
+    """Записать готовый снимок — эту часть можно отдавать в поток."""
     with _SAVE_LOCK:
-        return _write_payload(payload, target, now)
+        return _write_payload(payload, Path(path), now)
 
 
 def _write_payload(payload: dict[str, Any], target: Path, now: float) -> bool:

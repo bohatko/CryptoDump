@@ -44,7 +44,7 @@ from .models import Alert, DropHit
 from .monitor import DropMonitor
 from .okx_ws import OkxPublicStream, Subscription, liquidations, per_instrument, split_by_endpoint
 from .paper import PaperBook
-from .state import load_state, save_state
+from .state import load_state, state_payload, write_state
 from .universe import bootstrap_candles, build_universe
 from .ws_router import WsRouter
 
@@ -174,8 +174,7 @@ class Engine:
                 await asyncio.gather(dashboard, return_exceptions=True)
             await self.alerts.close()
             await self.rest.close()
-            # в потоке: файл может быть занят, а блокировать event loop на выходе не нужно
-            await asyncio.to_thread(self._save_state)
+            await self._save_state()
             self._close_history()
             log.info("остановлено, алертов отправлено: %d", self.alerts.sent)
 
@@ -555,15 +554,18 @@ class Engine:
             max_age_s=self.cfg.engine.state_max_age_s,
         )
 
-    def _save_state(self) -> None:
+    async def _save_state(self) -> None:
         if not self.cfg.engine.persist_state:
             return
-        save_state(
-            self.cfg.engine.state_path,
+        now = time.time()
+        payload = state_payload(
             trades={iid: s.trades for iid, s in self.states.items()},
             liq={iid: s.liq for iid, s in self.states.items()},
             cooldown=self.alerts.cooldown,
+            now=now,
         )
+        # в поток — только запись файла: снимок выше собран в event loop, пока данные не меняются
+        await asyncio.to_thread(write_state, self.cfg.engine.state_path, payload, now=now)
 
     async def _state_loop(self) -> None:
         # запись в отдельном потоке: файл небольшой, но цикл оценки ждать не должен
@@ -573,6 +575,6 @@ class Engine:
             if self._stop.is_set():
                 return
             try:
-                await asyncio.to_thread(self._save_state)
+                await self._save_state()
             except Exception:  # noqa: BLE001 — персист не должен ронять сканер
                 log.exception("ошибка сохранения состояния")
