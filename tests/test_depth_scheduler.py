@@ -141,6 +141,31 @@ def test_released_instrument_waits_before_new_slot(now: float) -> None:
     assert "B-USDT-SWAP" in sched.active()  # у B паузы не было
 
 
+def test_thin_book_released_and_paused_even_if_deeper(now: float) -> None:
+    """Тонкий стакан отпускается сразу и не возвращается по кругу, даже когда дамп углубился."""
+    states = {"T-USDT-SWAP": make_state("T-USDT-SWAP", drop_pct=-4.0, now=now)}
+    sched, stream = _scheduler(states, slots=3)
+    sched.want("T-USDT-SWAP", drop_pct=-4.0, now=now)
+    asyncio.run(sched.tick(now=now))
+    assert sched.has_book("T-USDT-SWAP")
+
+    sched.reject("T-USDT-SWAP", "0.02M USDT", now=now + 2)
+    asyncio.run(sched.tick(now=now + 2))
+    assert not sched.has_book("T-USDT-SWAP")
+    assert stream.unsubscribed == ["T-USDT-SWAP"]
+    assert sched.thin("T-USDT-SWAP", now=now + 2) == "0.02M USDT"
+
+    pause = sched.cfg.depth.book_thin_retry_s
+    sched.want("T-USDT-SWAP", drop_pct=-10.0, now=now + 60)  # в 2.5 раза глубже — всё равно пауза
+    asyncio.run(sched.tick(now=now + 60))
+    assert not sched.has_book("T-USDT-SWAP") and sched.pending() == {}
+
+    sched.want("T-USDT-SWAP", drop_pct=-10.0, now=now + 3 + pause)
+    asyncio.run(sched.tick(now=now + 3 + pause))
+    assert sched.has_book("T-USDT-SWAP")
+    assert stream.subscribed == ["T-USDT-SWAP", "T-USDT-SWAP"]
+
+
 def test_slow_feed_sheds_weakest_books_and_recovers(now: float) -> None:
     """Сделки опаздывают — стаканы забили канал: урезаем слоты, отпуская самые слабые просадки."""
     names = [f"X{i}-USDT-SWAP" for i in range(9)]

@@ -69,11 +69,14 @@ def passed_liquidity(cfg: Config, book: BookSummary) -> bool:
     ``require_full_depth`` важен: если снимок содержит только 5 уровней из ``books5``,
     сумма занижена, и порог в 1 млн USDT будет сравниваться с неполной глубиной.
     """
+    return book_ready(cfg, book) and book.total_notional >= cfg.depth.min_notional_usdt
+
+
+def book_ready(cfg: Config, book: BookSummary) -> bool:
+    """Стакану можно верить: свежий и полный. Неготовый ничего не говорит о ликвидности."""
     if cfg.depth.require_fresh_book and not book.fresh:
         return False
-    if cfg.depth.require_full_depth and not book.full_depth:
-        return False
-    return book.total_notional >= cfg.depth.min_notional_usdt
+    return not (cfg.depth.require_full_depth and not book.full_depth)
 
 
 def score_ok(cfg: Config, signals: Signals) -> bool:

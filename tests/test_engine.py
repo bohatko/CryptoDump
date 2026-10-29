@@ -185,3 +185,35 @@ def test_guard_waits_for_first_snapshot_of_new_slot(now: float) -> None:
     assert not engine._guard_owns("BTC-USDT-SWAP", now=now + 1)
     assert engine._guard_owns("BTC-USDT-SWAP", now=now + BOOK_GRACE_S)
     assert not engine._guard_owns("ETH-USDT-SWAP", now=now + BOOK_GRACE_S)
+
+
+def test_thin_book_slot_released_and_paused(now: float) -> None:
+    """Полный свежий, но тонкий стакан: слот отпускается сразу, повторно не запрашивается,
+    а эпизод в истории остаётся «тонкий стакан», а не «ждёт стакан»."""
+    engine = _engine(mode="ondemand")
+    scheduler = engine.depth_scheduler
+    assert scheduler is not None
+
+    class Stream:
+        async def subscribe(self, _args: list[dict[str, str]]) -> bool:
+            return True
+
+        async def unsubscribe(self, _args: list[dict[str, str]]) -> bool:
+            return True
+
+    scheduler.stream = Stream()  # type: ignore[assignment]
+    thin = [["100.0", "10"] for _ in range(20)]
+    state = _dumped_state(now, bids=thin, asks=thin)
+    engine.states[state.inst_id] = state
+    scheduler.want(state.inst_id, drop_pct=-4.0, now=now)
+    asyncio.run(scheduler.tick(now=now))
+
+    asyncio.run(engine._evaluate_all(now=now))
+    asyncio.run(scheduler.tick(now=now))
+    assert not scheduler.has_book(state.inst_id)
+
+    asyncio.run(engine._evaluate_all(now=now + 1))
+    asyncio.run(scheduler.tick(now=now + 1))
+    assert not scheduler.has_book(state.inst_id) and scheduler.pending() == {}
+    [episode] = engine.monitor.active()
+    assert episode.status == "тонкий стакан" and episode.detail.startswith("0.04M USDT")

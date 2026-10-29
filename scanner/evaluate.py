@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from .config import Config
-from .detection import detect_signals, passed_liquidity, score_ok
+from .detection import book_ready, detect_signals, passed_liquidity, score_ok
 from .instrument import InstrumentState
 from .models import Alert, BookSummary, DropHit, Signals
 from .plan import build_plan
@@ -77,6 +77,11 @@ def evaluate_instrument(
         return DropSeen(drop=deep)
 
     book = state.book.summary(cfg.depth, now=now)
+    if not book_ready(cfg, book):
+        # слот есть, но snapshot ещё не пришёл или стакан протух (его чинит DepthGuard):
+        # это не «тонкий стакан» — иначе ликвидную монету отпустили бы на паузу
+        report(STATUS_NO_BOOK, "стакан не готов")
+        return DropSeen(drop=deep)
     if not passed_liquidity(cfg, book):
         log.debug("%s: просадка есть, стакан не прошёл фильтр (%.0f USDT)", state.inst_id, book.total_notional)
         report(STATUS_THIN_BOOK, _book_detail(book))

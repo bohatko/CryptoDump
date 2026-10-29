@@ -36,7 +36,7 @@ from .alerts import AlertRouter
 from .config import Config, ConfigWatcher
 from .depth_guard import DepthGuard
 from .depth_scheduler import DepthScheduler
-from .evaluate import STATUS_LOW_SCORE, DropSeen, evaluate_instrument
+from .evaluate import STATUS_LOW_SCORE, STATUS_NO_BOOK, STATUS_THIN_BOOK, DropSeen, evaluate_instrument
 from .history import History
 from .instrument import InstrumentState
 from .market import OkxRest
@@ -477,12 +477,21 @@ class Engine:
             )
 
     def _observe(self, inst_id: str, drop: DropHit, status: str, detail: str, *, now: float) -> None:
-        self.monitor.observe(inst_id, drop, status, detail, now=now)
         scheduler = self.depth_scheduler
-        if status == STATUS_LOW_SCORE and scheduler is not None and scheduler.has_book(inst_id):
-            # стакан живой и ликвидный, дамп продолжается, ждём сигнатур — слот продлеваем.
-            # Тонкий стакан не продлеваем: слот истечёт по TTL и достанется другому.
+        if scheduler is not None and status == STATUS_NO_BOOK:
+            thin = scheduler.thin(inst_id, now=now)
+            if thin is not None:
+                # стакан отпущен на паузу за тонкость — «ждёт стакан» в истории было бы неправдой
+                status, detail = STATUS_THIN_BOOK, thin
+        self.monitor.observe(inst_id, drop, status, detail, now=now)
+        if scheduler is None or not scheduler.has_book(inst_id):
+            return
+        if status == STATUS_LOW_SCORE:
+            # стакан живой и ликвидный, дамп продолжается, ждём сигнатур — слот продлеваем
             scheduler.want(inst_id, drop_pct=drop.drop_pct, now=now)
+        elif status == STATUS_THIN_BOOK:
+            # стакан полный и свежий (неготовый оценка сообщает как «ждёт стакан»), но тонкий
+            scheduler.reject(inst_id, detail, now=now)
 
     async def _publish(self, alert: Alert) -> None:
         published = await self.alerts.publish(alert)

@@ -52,7 +52,8 @@
     "book_slots": 20,
     "book_ttl_s": 180,
     "book_min_hold_s": 30.0,
-    "book_retry_s": 600.0
+    "book_retry_s": 600.0,
+    "book_thin_retry_s": 600.0
   },
   "cvd": {
     "window_s": 300,

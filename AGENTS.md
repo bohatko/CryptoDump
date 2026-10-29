@@ -68,7 +68,7 @@ Dashboard (aiohttp.web, :8787) читает Engine / History / LogBuffer, пиш
 | `instrument.py` | `InstrumentState` — всё состояние одного инструмента: `book`, `candles`, `trades`, `drops`, `liq`, `last_trade`, `turnover`, `price()` |
 | `universe.py` | `build_universe` → `[(Instrument, оборот_24ч)]` (фильтр quote / `exclude_patterns` / `min_turnover_usdt` / `top_n`), `bootstrap_candles` |
 | `ws_router.py` | `WsRouter`: таблица «канал → обработчик» (`trades`, `candle1m`, `books`, `books5`, `liquidation-orders`); разрыв `seqId` → колбэк `on_book_gap` |
-| `depth_scheduler.py` | `DepthScheduler` (режим `ondemand`): слоты `books` под дампы, TTL `book_ttl_s`, вытеснение самой слабой просадки не раньше `book_min_hold_s`, пауза `book_retry_s` для отпущенных (`cooling()`) |
+| `depth_scheduler.py` | `DepthScheduler` (режим `ondemand`): слоты `books` под дампы, TTL `book_ttl_s`, вытеснение самой слабой просадки не раньше `book_min_hold_s`, пауза `book_retry_s` для отпущенных (`cooling()`); тонкий стакан — `reject()`: слот отпускается сразу, пауза `book_thin_retry_s` без исключений |
 | `depth_guard.py` | `DepthGuard`: переподписка `books` при разрыве цепочки или протухании (backoff 5 → 120 c на инструмент, сброс после 60 c здоровья); REST-поллинг только при `depth.source == "rest"` |
 | `evaluate.py` | `evaluate_instrument()` — чистая функция: просадка → фильтр ликвидности → сигнатуры → `Alert` (с `plan`) / `DropSeen` / `None` |
 | `plan.py` | `build_plan()` — чистая функция: план лонга по алерту (вход = ask, стоп под стеной/дном, цели по откату дампа, R:R, размер от `trade.risk_usdt`, округление до `tickSz`) |
@@ -124,6 +124,12 @@ Dashboard (aiohttp.web, :8787) читает Engine / History / LogBuffer, пиш
   добавляйте прямых `send_json` с `op` подписки в обход `_send`.
 - `DepthGuard` — экспоненциальный backoff на инструмент; `DepthScheduler` — `book_min_hold_s`
   и `book_retry_s`. Любой новый источник переподписок должен иметь свой предел частоты.
+- Тонкий стакан (полный и свежий, но ниже `min_notional_usdt`) → `Engine._observe` →
+  `DepthScheduler.reject`: слот отпускается на ближайшем тике и `book_thin_retry_s` не
+  выдаётся, даже если дамп углубился. Раньше такие монеты гоняли подписку по кругу каждые
+  `book_ttl_s` и выедали бюджет. Поэтому неготовый стакан (нет snapshot, протух, неполный)
+  `evaluate_instrument` сообщает как «ждёт стакан» + `DropSeen`, а не «тонкий» — иначе
+  ликвидную монету отправили бы на паузу до первого snapshot.
 - Расход виден в `/api/status` → `streams[].budget` и в шапке дашборда.
 
 **Пропускная способность канала.** Через медленный VPN (~150 КБ/с) 20 стаканов `books`
@@ -231,9 +237,6 @@ Dashboard (aiohttp.web, :8787) читает Engine / History / LogBuffer, пиш
 
 - Одно WS-соединение на эндпоинт: при очень широкой вселенной может упереться в лимит
   подписок OKX (M2 в `PLAN.md`).
-- Слот выдан, но стакан ещё не прошёл фильтр (`authoritative=False` до первого snapshot) →
-  оценка вернёт `None`, `want()` не вызовется, и слот проживёт только `book_ttl_s` с момента
-  выдачи. На практике snapshot приходит за < 1 c.
 - `liquidation-orders` OKX публикует не полностью и только для SWAP — сигнатура `liq_decay`
   подтверждающая. У квартальных фьючерсов её не бывает.
 - Нет replay записанного потока и калибровки порогов на истории (M1/M3).

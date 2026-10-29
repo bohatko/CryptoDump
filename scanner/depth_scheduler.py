@@ -22,6 +22,9 @@
 Поэтому слот не отбирается раньше ``book_min_hold_s`` (иначе две просадки забирают
 его друг у друга каждую секунду), а освобождённый инструмент ``book_retry_s`` не
 получает стакан снова — кроме случая, когда его просадка стала в 1.5 раза глубже.
+Стакан, который пришёл полным и свежим, но не прошёл фильтр ликвидности, отпускается
+сразу (``reject``) и ``book_thin_retry_s`` не выдаётся без исключений: иначе тонкая
+монета в затяжном дампе гоняла бы подписку по кругу каждые ``book_ttl_s``.
 
 Стаканы — основная часть трафика. Если канал до биржи узкий (медленный VPN), они
 забивают его, и сделки начинают приходить с опозданием в секунды — цены в алертах
@@ -79,6 +82,7 @@ class DepthScheduler:
     _slots: dict[str, Slot] = field(default_factory=dict)
     _pending: dict[str, float] = field(default_factory=dict)  # inst_id -> последняя известная просадка
     _released: dict[str, tuple[float, float]] = field(default_factory=dict)  # inst_id -> (когда, просадка)
+    _thin: dict[str, tuple[float, str]] = field(default_factory=dict)  # inst_id -> (когда отвергнут, детали)
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     _cap: int | None = None  # урезанный из-за перегрузки канала лимит слотов; None — book_slots
     _cap_changed_at: float = 0.0
@@ -153,7 +157,35 @@ class DepthScheduler:
         """Инструменты, которым стакан пока не выдаётся повторно: inst_id → секунд до конца паузы."""
         now = time.time()
         retry = self.cfg.depth.book_retry_s
-        return {iid: retry - (now - at) for iid, (at, _drop) in self._released.items() if now - at < retry}
+        left = {iid: retry - (now - at) for iid, (at, _drop) in self._released.items() if now - at < retry}
+        thin = self.cfg.depth.book_thin_retry_s
+        for iid, (at, _detail) in self._thin.items():
+            if now - at < thin:
+                left[iid] = max(left.get(iid, 0.0), thin - (now - at))
+        return left
+
+    def reject(self, inst_id: str, detail: str = "", *, now: float | None = None) -> None:
+        """Стакан полный и свежий, но тонкий — отпустить слот на ближайшем тике и не
+        выдавать его снова ``book_thin_retry_s``. Синхронный: вызывается из оценки."""
+        now = time.time() if now is None else now
+        if inst_id not in self._thin:
+            log.info(
+                "%s: стакан тонкий (%s) — слот отпускаю, повторно не раньше чем через %.0f мин",
+                inst_id,
+                detail or "ниже порога",
+                self.cfg.depth.book_thin_retry_s / 60,
+            )
+        self._thin[inst_id] = (now, detail)
+        self._pending.pop(inst_id, None)
+
+    def thin(self, inst_id: str, *, now: float | None = None) -> str | None:
+        """Детали отказа, если инструмент сейчас на паузе за тонкий стакан, иначе ``None``."""
+        rejected = self._thin.get(inst_id)
+        if rejected is None:
+            return None
+        now = time.time() if now is None else now
+        at, detail = rejected
+        return detail if now - at < self.cfg.depth.book_thin_retry_s else None
 
     async def release(self, inst_id: str) -> bool:
         """Освободить слот вручную (из дашборда)."""
@@ -183,9 +215,16 @@ class DepthScheduler:
         """Один проход: вытеснить протухшие слоты, выдать слоты ожидающим."""
         now = time.time() if now is None else now
         async with self._lock:
+            await self._release_thin(now)
             await self._evict_expired(now)
             await self._shed_surplus(now)
             await self._grant_pending(now)
+
+    async def _release_thin(self, now: float) -> None:
+        pause = self.cfg.depth.book_thin_retry_s
+        self._thin = {iid: rej for iid, rej in self._thin.items() if now - rej[0] < pause}
+        for inst_id in [iid for iid in self._thin if iid in self._slots]:
+            await self._release(inst_id, now=now)
 
     async def _shed_surplus(self, now: float) -> None:
         """Лимит урезан перегрузкой — отпускаем самые слабые просадки, не дожидаясь min_hold."""
@@ -228,7 +267,7 @@ class DepthScheduler:
             if inst_id in self._slots:
                 self._pending.pop(inst_id, None)
                 continue
-            if self._cooling_down(inst_id, candidate_drop, now):
+            if self.thin(inst_id, now=now) is not None or self._cooling_down(inst_id, candidate_drop, now):
                 # стакан только что был и ничего не дал — очередь не занимаем,
                 # want() вернёт инструмент сюда, если просадка продолжится
                 self._pending.pop(inst_id, None)

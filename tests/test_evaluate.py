@@ -5,8 +5,9 @@ from __future__ import annotations
 from conftest import make_candles
 
 from scanner.config import Config
-from scanner.evaluate import STATUS_ALERT, STATUS_NO_BOOK, STATUS_THIN_BOOK, evaluate_instrument
+from scanner.evaluate import STATUS_ALERT, STATUS_NO_BOOK, STATUS_THIN_BOOK, DropSeen, evaluate_instrument
 from scanner.instrument import InstrumentState
+from scanner.orderbook import OrderBook
 from scanner.ws_router import WsRouter
 
 WALL_BIDS = [["100.0", "1000"]] + [["99.95", "6000"]] + [["99.9", "1000"] for _ in range(18)]
@@ -78,6 +79,14 @@ def test_observer_reports_why_drop_did_not_alert(now: float) -> None:
     thin = [["100.0", "10"] for _ in range(20)]
     [(status, detail)] = _statuses(_dumped_state(now, bids=thin, asks=thin), now)
     assert status == STATUS_THIN_BOOK and detail.startswith("0.04M USDT")
+
+
+def test_unready_book_is_not_thin(now: float) -> None:
+    """Слот выдан, а snapshot ещё не пришёл: это «ждёт стакан» (слот продлевается), не «тонкий»."""
+    state = _dumped_state(now)
+    state.book = OrderBook(inst_id=state.inst_id, ct_val=state.ct_val)
+    assert _statuses(state, now) == [(STATUS_NO_BOOK, "стакан не готов")]
+    assert isinstance(evaluate_instrument(state, Config(), now=now), DropSeen)
 
 
 def test_observer_silent_without_drop(now: float) -> None:
