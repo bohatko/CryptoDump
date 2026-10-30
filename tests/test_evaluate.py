@@ -5,7 +5,15 @@ from __future__ import annotations
 from conftest import make_candles
 
 from scanner.config import Config
-from scanner.evaluate import STATUS_ALERT, STATUS_NO_BOOK, STATUS_THIN_BOOK, DropSeen, evaluate_instrument
+from scanner.evaluate import (
+    STATUS_ALERT,
+    STATUS_MARKET_DUMP,
+    STATUS_NO_BOOK,
+    STATUS_THIN_BOOK,
+    DropSeen,
+    analyze_market_drop,
+    evaluate_instrument,
+)
 from scanner.instrument import InstrumentState
 from scanner.orderbook import OrderBook
 from scanner.ws_router import WsRouter
@@ -102,3 +110,37 @@ def test_stale_price_no_alert(now: float) -> None:
     # сделки и свечи старше trade_stale_after_s — цена неизвестна, просадку не считаем
     later = now + 3600
     assert evaluate_instrument(_dumped_state(now), Config(), now=later) is None
+
+
+def test_market_dump_breadth_and_leader_block_alerts(now: float) -> None:
+    cfg = Config()
+    states: dict[str, InstrumentState] = {}
+    for name in ("SOL", "DOGE", "XRP", "PEPE"):
+        s = _dumped_state(now)
+        s.inst_id = f"{name}-USDT-SWAP"
+        states[s.inst_id] = s
+
+    ctx = analyze_market_drop(states, cfg, now=now)
+    assert ctx.breadth_reason is not None and "4/4" in ctx.breadth_reason
+    seen: list[tuple[str, str]] = []
+    res = evaluate_instrument(
+        states["SOL-USDT-SWAP"],
+        cfg,
+        now=now,
+        observe=lambda _d, st, detail: seen.append((st, detail)),
+        market_drop=ctx.reason_for("SOL-USDT-SWAP"),
+    )
+    assert res is None
+    assert seen and seen[0][0] == STATUS_MARKET_DUMP
+
+    # одиночный дамп при падающем поводыре BTC тоже откладывается
+    calm = {f"C{i}-USDT-SWAP": InstrumentState(f"C{i}-USDT-SWAP", "SWAP") for i in range(4)}
+    for s in calm.values():
+        s.candles.seed(make_candles(now - 600, [100.0] * 10, 100.0))
+    btc = _dumped_state(now)
+    btc.inst_id = "BTC-USDT-SWAP"
+    calm[btc.inst_id] = btc
+    leader_ctx = analyze_market_drop(calm, cfg, now=now)
+    assert leader_ctx.breadth_reason is None
+    assert leader_ctx.reason_for("SOL-USDT-SWAP") == "поводырь BTC -4.0%"
+    assert leader_ctx.reason_for("BTC-USDT-SWAP") is None  # сам поводырь на себя не ссылается

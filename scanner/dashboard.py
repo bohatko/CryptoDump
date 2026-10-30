@@ -186,11 +186,13 @@ class Dashboard:
             "lastEvalAt": e.last_eval_at,
             "lastEvalMs": round(e.last_eval_ms, 1),
             "feedLagS": e.feed_lag_s,
+            "marketDrop": e.market_drop,
             "paper": {
                 "enabled": cfg.paper.enabled,
                 "start": cfg.paper.start_balance,
                 "balance": round(e.paper.balance(), 2),
                 "open": next((t.inst_id for t in e.paper.trades.values() if t.taken and t.status == "open"), None),
+                "pause": e.paper.pause_reason(now),
             },
             "streams": streams,
             "depth": {

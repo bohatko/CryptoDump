@@ -51,6 +51,22 @@ def test_stop_under_dump_bottom_without_wall(now: float) -> None:
     assert plan.stop == 94.715  # 95 − 0.3%
 
 
+def test_wall_above_dump_bottom_does_not_place_stop_in_midair(now: float) -> None:
+    """Цена уже ходила на 64.72 и отскочила к 65.41, стена встала на 65.25 — стоп ставим под дно 64.72."""
+    plan = build_plan(
+        TradeConfig(),
+        price=65.40,
+        high=69.95,
+        low=64.72,
+        book=_book(ask=65.41, wall_px=65.25, now=now),
+        tick_sz=0.01,
+        now=now,
+    )
+    assert plan is not None
+    assert plan.stop_basis == "дном дампа 64.72"
+    assert plan.stop == 64.52
+
+
 def test_too_close_stop_is_widened(now: float) -> None:
     """Стена прямо под ценой: стоп 0.1% выбьет шум, отодвигаем до min_stop_pct."""
     plan = build_plan(

@@ -158,7 +158,7 @@
       <h3>История дампов <span class="hint muted">каждая просадка выше порога окна, даже если алерта не было, — видно, какой фильтр её отсеял</span></h3>
       <div class="filters">
         <input id="fEpInst" placeholder="Инструмент" size="16">
-        <select id="fEpStatus"><option value="">Любой итог</option><option>алерт</option><option>мало сигнатур</option><option>тонкий стакан</option><option>ждёт стакан</option><option>нет сделок</option></select>
+        <select id="fEpStatus"><option value="">Любой итог</option><option>алерт</option><option>общий пролив</option><option>мало сигнатур</option><option>тонкий стакан</option><option>ждёт стакан</option><option>нет сделок</option></select>
         <select id="fEpAlerted"><option value="">С алертом и без</option><option value="1">Только с алертом</option><option value="0">Без алерта</option></select>
         <select id="fEpHours"><option value="24" selected>24 часа</option><option value="168">7 дней</option><option value="720">30 дней</option><option value="">Всё время</option></select>
         <span class="spacer"></span><span class="muted" id="epTotal"></span>
@@ -328,6 +328,8 @@ function renderHeader() {
 
   const banners = [];
   if (!ONLINE) banners.push(`<div class="banner bad">Нет связи со сканером — переподключаюсь… (если нажимали «Перезапуск», это нормально)</div>`);
+  if (s.marketDrop) banners.push(`<div class="banner warn">Общий пролив рынка (<b>${esc(s.marketDrop)}</b>) — новые алерты и входы поставлены на паузу, пока рынок не успокоится.</div>`);
+  if (s.paper && s.paper.pause) banners.push(`<div class="banner warn">Виртуальный счёт: <b>${esc(s.paper.pause)}</b></div>`);
   if (s.feedLagS != null && s.feedLagS >= 3) banners.push(`<div class="banner warn">Данные OKX опаздывают на <b>${s.feedLagS.toFixed(0)} c</b> (норма ~0.1 c): канал до биржи не успевает — медленный VPN или сеть. Цены в алертах устаревшие. Сканер сам урезает число стаканов; если не помогает — нужен канал быстрее (другой сервер VPN или запуск на VPS).</div>`);
   if (s.pendingRestart.length) banners.push(`<div class="banner warn">Сохранены настройки, которые применятся только после перезапуска: <b>${esc(s.pendingRestart.join(", "))}</b><span class="spacer"></span><button onclick="doRestart()">Перезапустить</button></div>`);
   if (s.logs.errors5m >= 10) banners.push(`<div class="banner warn">За 5 минут ${s.logs.errors5m} ошибок в журнале — загляните во вкладку «Журнал».</div>`);
@@ -667,6 +669,7 @@ async function refreshPaper() {
       <span>Стоп</span><span>стоп плана; ${r.breakeven ? "после 1-й цели — в безубыток" : "без переноса"}; ликвидация, если она ближе стопа</span>
       <span>По времени</span><span>закрыть по рынку через ${fmtDur(r.maxHoldS)}</span>
       <span>Фильтр</span><span>прибыль/риск до тейка ≥ ${r.minRr}</span>
+      <span>Защита от стопов</span><span>после стопа по монете пауза ${fmtDur(r.reentryCooldownS || 0)}; после ${r.lossStreakLimit || 0} стопов подряд — пауза счёта ${fmtDur(r.lossStreakPauseS || 0)}</span>
       <span>Издержки</span><span>комиссия ${r.feePct}% × 2 от номинала, проскальзывание ${r.slippagePct}% на стопе и по времени</span>
       <span>Внутри минуты</span><span>если стоп и тейк в одной свече — считаем стоп</span>
     </div><div class="muted" style="margin-top:8px;font-size:12.5px">Правила меняются в «Настройки → Виртуальный счёт»; «Пересчитать с нуля» прогонит все алерты из истории заново.</div>`;
@@ -735,6 +738,9 @@ const FIELDS = [
     ["paper", "target_index", "Тейк: цель плана (0, 1, 2)"],
     ["paper", "min_rr", "Не входить при прибыль/риск ниже"],
     ["paper", "max_hold_s", "Закрыть по времени через, с"],
+    ["paper", "reentry_cooldown_s", "Пауза по монете после стопа, с"],
+    ["paper", "loss_streak_limit", "Стопов подряд до паузы счёта"],
+    ["paper", "loss_streak_pause_s", "Пауза счёта после серии стопов, с"],
     ["paper", "fee_pct", "Комиссия за сторону, %"],
     ["paper", "slippage_pct", "Проскальзывание на стопе, %"],
   ]],
@@ -749,8 +755,12 @@ const FIELDS = [
     ["liquidation", "decay_ratio", "Затухание: стало/было не выше"],
     ["liquidation", "min_notional_usdt", "Мин. объём ликвидаций, USDT"],
   ]],
-  ["Алерт", [
+  ["Алерт и защита от пролива", [
     ["signals", "min_score", "Мин. число сигнатур (из 3)"],
+    ["signals", "max_market_drop_share", "Стоп при просадке доли рынка (0–1, 0 = выкл)"],
+    ["signals", "market_drop_min_coins", "Мин. монет для общего пролива"],
+    ["signals", "market_drop_window_s", "Окно проверки общего пролива, с"],
+    ["signals", "leader_max_drop_pct", "Стоп при падении поводыря (BTC/ETH/SPY/QQQ), %"],
     ["alerts", "cooldown_s", "Кулдаун на инструмент и окно, с"],
   ]],
   ["Рынок", [

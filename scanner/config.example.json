@@ -69,7 +69,11 @@
     "min_notional_usdt": 200000
   },
   "signals": {
-    "min_score": 2
+    "min_score": 2,
+    "max_market_drop_share": 0.25,
+    "market_drop_min_coins": 4,
+    "market_drop_window_s": 1800,
+    "leader_max_drop_pct": 1.5
   },
   "alerts": {
     "cooldown_s": 300,
@@ -129,7 +133,10 @@
     "target_index": 1,
     "min_rr": 1.0,
     "breakeven_after_first": true,
-    "max_hold_s": 7200.0
+    "max_hold_s": 7200.0,
+    "reentry_cooldown_s": 3600.0,
+    "loss_streak_limit": 2,
+    "loss_streak_pause_s": 1800.0
   },
   "dashboard": {
     "enabled": true,

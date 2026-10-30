@@ -273,6 +273,53 @@ class PaperBook:
                 return t
         return None
 
+    def _reentry_pause(self, inst_id: str, at: float) -> str | None:
+        """Пауза на повторный вход в ту же монету после стопа (не ловим падающий нож дважды)."""
+        cooldown = self.pcfg.reentry_cooldown_s
+        if cooldown <= 0:
+            return None
+        closed = [
+            t
+            for t in self.trades.values()
+            if t.taken and t.inst_id == inst_id and t.status == "closed" and (t.closed_at or 0.0) <= at
+        ]
+        if not closed:
+            return None
+        last = max(closed, key=lambda t: t.closed_at or 0.0)
+        if last.reason not in (REASON_SL, REASON_LIQ):
+            return None
+        left = cooldown - (at - (last.closed_at or 0.0))
+        if left <= 0:
+            return None
+        return f"пауза после стопа {inst_id} ({max(1, round(left / 60))} мин)"
+
+    def pause_reason(self, at: float) -> str | None:
+        """Пауза счёта после серии стопов подряд (защита от каскадного пролива рынка)."""
+        limit = self.pcfg.loss_streak_limit
+        pause = self.pcfg.loss_streak_pause_s
+        if limit <= 0 or pause <= 0:
+            return None
+        closed = sorted(
+            (t for t in self.trades.values() if t.taken and t.status == "closed" and (t.closed_at or 0.0) <= at),
+            key=lambda t: t.closed_at or 0.0,
+        )
+        streak = 0
+        last_stop_at = 0.0
+        for t in closed:
+            if streak >= limit and t.opened_at >= last_stop_at + pause:
+                streak = 0
+            if t.reason in (REASON_SL, REASON_LIQ):
+                streak += 1
+                last_stop_at = t.closed_at or t.opened_at
+            else:
+                streak = 0
+        if streak < limit:
+            return None
+        left = pause - (at - last_stop_at)
+        if left <= 0:
+            return None
+        return f"пауза после {streak} стопов подряд ({max(1, round(left / 60))} мин)"
+
     def on_alert(self, alert_id: int, data: dict[str, Any], *, source: str = "live") -> PaperTrade | None:
         if alert_id in self._seen or (source == "live" and not self.ready):
             # до конца прогона живые алерты подхватит он: порядок сделок на счёте важен
@@ -282,10 +329,16 @@ class PaperBook:
         if trade is None:
             return None
         busy = self._busy(trade.opened_at)
+        streak_pause = self.pause_reason(trade.opened_at)
+        inst_pause = self._reentry_pause(trade.inst_id, trade.opened_at)
         if not self.pcfg.enabled:
             trade.skip_reason = "счёт выключен"
         elif busy is not None:
             trade.skip_reason = f"капитал в сделке {busy.inst_id}"
+        elif streak_pause is not None:
+            trade.skip_reason = streak_pause
+        elif inst_pause is not None:
+            trade.skip_reason = inst_pause
         elif trade.rr < self.pcfg.min_rr:
             trade.skip_reason = f"прибыль/риск {trade.rr:.2f} < {self.pcfg.min_rr:g}"
         else:
@@ -465,6 +518,9 @@ class PaperBook:
                 "minRr": pc.min_rr,
                 "breakeven": pc.breakeven_after_first,
                 "maxHoldS": pc.max_hold_s,
+                "reentryCooldownS": pc.reentry_cooldown_s,
+                "lossStreakLimit": pc.loss_streak_limit,
+                "lossStreakPauseS": pc.loss_streak_pause_s,
             },
             "account": {
                 "start": pc.start_balance,
@@ -474,6 +530,7 @@ class PaperBook:
                 "maxDrawdownPct": round(max_dd * 100, 2),
                 "growthPerTradePct": None if growth is None else round(growth * 100, 3),
                 "open": open_api,
+                "pause": self.pause_reason(now),
                 "unrealized": round(unrealized, 2),
                 **acc,
             },

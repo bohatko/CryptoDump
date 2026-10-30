@@ -36,7 +36,14 @@ from .alerts import AlertRouter
 from .config import Config, ConfigWatcher
 from .depth_guard import DepthGuard
 from .depth_scheduler import DepthScheduler
-from .evaluate import STATUS_LOW_SCORE, STATUS_NO_BOOK, STATUS_THIN_BOOK, DropSeen, evaluate_instrument
+from .evaluate import (
+    STATUS_LOW_SCORE,
+    STATUS_NO_BOOK,
+    STATUS_THIN_BOOK,
+    DropSeen,
+    analyze_market_drop,
+    evaluate_instrument,
+)
 from .history import History
 from .instrument import InstrumentState
 from .market import OkxRest
@@ -93,6 +100,7 @@ class Engine:
         self.last_eval_at = 0.0
         self.last_eval_ms = 0.0
         self.feed_lag_s: float | None = None
+        self.market_drop: str | None = None
         self._lag_warned_at = 0.0
         self._lag_reconnect_at = 0.0
         # main.py пересоздаёт движок, если остановка запрошена как перезапуск (дашборд)
@@ -409,6 +417,13 @@ class Engine:
         started = time.perf_counter()
         alerts: list[Alert] = []
         scheduler = self.depth_scheduler
+        market_ctx = analyze_market_drop(self.states, self.cfg, now=now)
+        prev_market_drop = self.market_drop
+        self.market_drop = market_ctx.summary
+        if self.market_drop and not prev_market_drop:
+            log.warning("общий пролив рынка (%s) — новые алерты приостановлены", self.market_drop)
+        elif not self.market_drop and prev_market_drop:
+            log.info("общий пролив закончился — поиск отскоков возобновлён")
         for state in list(self.states.values()):
             try:
                 # в режимах ondemand/top стакан есть не у всех — тогда оценка
@@ -421,6 +436,7 @@ class Engine:
                     observe=lambda drop, status, detail, iid=state.inst_id: self._observe(
                         iid, drop, status, detail, now=now
                     ),
+                    market_drop=market_ctx.reason_for(state.inst_id),
                 )
             except Exception:  # noqa: BLE001 — один инструмент не должен ломать проход
                 log.exception("ошибка оценки %s", state.inst_id)

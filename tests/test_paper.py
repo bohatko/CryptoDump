@@ -118,6 +118,39 @@ def test_min_rr_filter(now: float) -> None:
     assert book.on_alert(2, {"ts": now, "instId": "X-USDT-SWAP"}) is None  # без плана сделки нет
 
 
+def test_reentry_cooldown_and_loss_streak_pause(now: float) -> None:
+    """После стопа на монете не перезаходим в неё час; после 2 стопов подряд счёт ждёт 30 мин."""
+    cfg = Config()
+    cfg.paper = _cfg(reentry_cooldown_s=3600.0, loss_streak_limit=2, loss_streak_pause_s=1800.0)
+    book = PaperBook(cfg)
+    book.ready = True
+    states = {iid: InstrumentState(iid, "SWAP") for iid in ("A-USDT-SWAP", "B-USDT-SWAP", "C-USDT-SWAP")}
+
+    t1 = book.on_alert(1, _alert(now, inst="A-USDT-SWAP"))
+    assert t1 is not None and t1.taken
+    states["A-USDT-SWAP"].trades.add(Trade("A-USDT-SWAP", 97.0, 1.0, "sell", now + 60), now=now + 60)
+    book.update(states, now=now + 60)
+    assert t1.reason == REASON_SL
+
+    # повторный алерт по той же монете через 2 минуты блокируется
+    same = book.on_alert(2, _alert(now + 180, inst="A-USDT-SWAP"))
+    assert same is not None and not same.taken and "пауза после стопа A-USDT-SWAP" in same.skip_reason
+
+    # другая монета открывается, но тоже ловит стоп -> серия 2 стопа подряд
+    t2 = book.on_alert(3, _alert(now + 200, inst="B-USDT-SWAP"))
+    assert t2 is not None and t2.taken
+    states["B-USDT-SWAP"].trades.add(Trade("B-USDT-SWAP", 97.0, 1.0, "sell", now + 260), now=now + 260)
+    book.update(states, now=now + 260)
+
+    # третья монета во время 30-минутной паузы счёта пропускается
+    paused = book.on_alert(4, _alert(now + 500, inst="C-USDT-SWAP"))
+    assert paused is not None and not paused.taken and "2 стопов подряд" in paused.skip_reason
+
+    # после окончания паузы счёта вход снова разрешён
+    resumed = book.on_alert(5, _alert(now + 260 + 1801, inst="C-USDT-SWAP"))
+    assert resumed is not None and resumed.taken
+
+
 class FakeRest:
     def __init__(self, rows: list[list[str]]) -> None:
         self.rows = rows

@@ -46,7 +46,9 @@ def build_plan(
     warnings: list[str] = []
 
     wall = book.wall
-    if wall is not None and 0 < wall.px < entry:
+    # Стена выше дна дампа — не опора для стопа: цена уже ходила ниже неё, и обычный
+    # ретест дна выбьет стоп до отскока. Опираемся на стену только когда она держит дно.
+    if wall is not None and 0 < wall.px < entry and wall.px <= bottom:
         basis_px, basis = wall.px, f"стеной {_px(wall.px)}"
     else:
         basis_px, basis = bottom, f"дном дампа {_px(bottom)}"
